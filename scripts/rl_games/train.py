@@ -32,7 +32,7 @@ parser.add_argument("--sigma", type=str, default=None, help="The policy's initia
 parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
 parser.add_argument("--wandb-project-name", type=str, default="forge", help="the wandb's project name")
 parser.add_argument("--wandb-entity", type=str, default="tjrcjf410-seoul-national-university", help="the entity (team) of wandb's project")
-parser.add_argument("--wandb-name", type=str, default="forge", help="the name of wandb's run")
+parser.add_argument("--wandb-name", type=str, default=None, help="the name of wandb's run")
 parser.add_argument(
     "--track",
     type=lambda x: bool(strtobool(x)),
@@ -151,7 +151,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
     # specify directory for logging runs
-    log_dir = agent_cfg["params"]["config"].get("full_experiment_name", datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
+    # log_dir = agent_cfg["params"]["config"].get("full_experiment_name", datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
+    seed = agent_cfg["params"]["seed"]
+    log_dir = f"{args_cli.task}-rl_games-seed={seed}"
     # set directory into agent config
     # logging directory path: <train_dir>/<full_experiment_name>
     agent_cfg["params"]["config"]["train_dir"] = log_root_path
@@ -232,7 +234,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         if args_cli.wandb_entity is None:
             raise ValueError("Weights and Biases entity must be specified for tracking.")
         import wandb
-
+        print("experiment name", experiment_name)
         wandb.init(
             project=wandb_project,
             entity=args_cli.wandb_entity,
