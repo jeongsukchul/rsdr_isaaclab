@@ -230,7 +230,6 @@ class FactoryTaskSpaceControl(ActionTerm):
     def process_actions(self, actions: torch.Tensor):
         """Apply EMA smoothing and compute target poses (matching DirectRLEnv _pre_physics_step + _apply_action)."""
         self._raw_actions[:] = actions
-        print("self ee linvel_fd", self.ee_linvel_fd)
         
         # Apply EMA smoothing (matching DirectRLEnv _pre_physics_step)
         self.actions[:] = self.ema_factor * actions + (1.0 - self.ema_factor) * self.actions

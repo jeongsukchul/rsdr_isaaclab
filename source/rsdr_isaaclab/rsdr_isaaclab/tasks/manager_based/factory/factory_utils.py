@@ -113,39 +113,87 @@ def collapse_obs_dict(obs_dict, obs_order):
     obs_tensors = torch.cat(obs_tensors, dim=-1)
     return obs_tensors
 
+
+
 def get_handheld_asset_relative_pose(task_cfg, num_envs, device):
-    """Replicates the DirectRLEnv logic using your specific task_cfg structure."""
+    """
+    Get default relative pose between held asset and fingertip.
+    Identical port from DirectRLEnv logic.
+    """
     task_name = task_cfg.name
-    held_asset_cfg = task_cfg.held_asset_cfg
-    fixed_asset_cfg = task_cfg.fixed_asset_cfg
     
+    # Initialize position tensor
     held_asset_relative_pos = torch.zeros((num_envs, 3), device=device)
     
     if task_name == "peg_insert":
-        # Offset by peg height minus fingerpad length
-        held_asset_relative_pos[:, 2] = held_asset_cfg.height - 0.02 
+        # logic: height - fingerpad_length
+        held_asset_relative_pos[:, 2] = task_cfg.held_asset_cfg.height
+        # Note: Ensure robot_cfg is accessible in task_cfg.
+        # If task_cfg is the FactoryTask config, it should have robot_cfg.
+        held_asset_relative_pos[:, 2] -= task_cfg.robot_cfg.franka_fingerpad_length
+
     elif task_name == "gear_mesh":
-        # Gear requires the specific X and Z offsets from the mounting base
-        gear_base_offset = fixed_asset_cfg.medium_gear_base_offset
+        # logic: gear_base_offset X + Z + height_adjustment
+        gear_base_offset = task_cfg.fixed_asset_cfg.medium_gear_base_offset
         held_asset_relative_pos[:, 0] += gear_base_offset[0]
-        held_asset_relative_pos[:, 2] += gear_base_offset[2] + (held_asset_cfg.height / 2.0 * 1.1)
+        held_asset_relative_pos[:, 2] += gear_base_offset[2]
+        held_asset_relative_pos[:, 2] += task_cfg.held_asset_cfg.height / 2.0 * 1.1
+
     elif task_name == "nut_thread":
-        # Nut sits at the base height of the bolt
-        held_base_pos_local = torch.zeros((num_envs, 3), device=device)
-        held_base_pos_local[:, 2] = fixed_asset_cfg.base_height
-        held_asset_relative_pos = held_base_pos_local
-    
-    # Orientation logic from your snippet
-    held_asset_relative_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=device).repeat(num_envs, 1)
+        # logic: use helper function for nut base position
+        # We assume get_held_base_pos_local is defined in this same utils file or imported
+        held_asset_relative_pos = get_held_base_pos_local(
+            task_name, task_cfg.fixed_asset_cfg, num_envs, device
+        )
+    else:
+        raise NotImplementedError(f"Task {task_name} not implemented")
+
+    # Initialize orientation tensor
+    held_asset_relative_quat = torch.tensor(
+        [1.0, 0.0, 0.0, 0.0], device=device
+    ).unsqueeze(0).repeat(num_envs, 1)
+
     if task_name == "nut_thread":
-        # Use the specific initial rotation from your task_cfg
+        # logic: initial rotation along Z-axis
+        initial_rot_deg = task_cfg.held_asset_rot_init
         rot_yaw_euler = torch.tensor(
-            [0.0, 0.0, np.deg2rad(task_cfg.held_asset_rot_init)], 
-            device=device
+            [0.0, 0.0, initial_rot_deg * np.pi / 180.0], device=device
         ).repeat(num_envs, 1)
         
         held_asset_relative_quat = torch_utils.quat_from_euler_xyz(
-            rot_yaw_euler[:, 0], rot_yaw_euler[:, 1], rot_yaw_euler[:, 2]
+            roll=rot_yaw_euler[:, 0], 
+            pitch=rot_yaw_euler[:, 1], 
+            yaw=rot_yaw_euler[:, 2]
         )
 
     return held_asset_relative_pos, held_asset_relative_quat
+
+# Ensure this helper function is also present in your utils file
+def get_held_base_pos_local(task_name, fixed_asset_cfg, num_envs, device):
+    """Helper for Nut Thread local position."""
+    if task_name == "nut_thread":
+        # For nut thread, the 'local' pos is just the base height of the fixed asset (bolt)
+        pos = torch.zeros((num_envs, 3), device=device)
+        pos[:, 2] = fixed_asset_cfg.base_height
+        return pos
+    else:
+        # Generic fallback
+        return torch.zeros((num_envs, 3), device=device)
+def get_asset_grasp_width(task_cfg):
+    """
+    Robustly determines the width of the object to prevent grasp explosion.
+    """
+    held_cfg = task_cfg.held_asset_cfg
+    
+    if hasattr(held_cfg, "diameter"):
+        return held_cfg.diameter
+    elif hasattr(held_cfg, "width"):
+        return held_cfg.width
+    elif hasattr(held_cfg, "radius"):
+        return held_cfg.radius * 2.0
+    else:
+        # Fallback defaults based on Factory assets
+        if "peg" in task_cfg.name: return 0.02 # 2cm
+        if "gear" in task_cfg.name: return 0.02 # Gear shaft
+        if "nut" in task_cfg.name: return 0.02 
+        return 0.02

@@ -41,8 +41,6 @@ def body_pos_rel_fixed(
     fingertip_body_idx = robot.body_names.index(body_name)
     fingertip_midpoint_pos = robot.data.body_pos_w[:, fingertip_body_idx] - env.scene.env_origins
     output = fingertip_midpoint_pos - noisy_fixed_pos
-    print("env 0 rel pos", output[0])
-    print("env 1 rel pos", output[1])
     # 4. Compute Relative Position
     return output
 
@@ -145,3 +143,17 @@ def last_action(env: ManagerBasedRLEnv, action_name: str | None = None) -> torch
         return env.action_manager.action
     else:
         return env.action_manager.get_term(action_name).raw_actions
+    
+def visualize_frames(env: ManagerBasedRLEnv):
+    # 1. Get current world positions
+    robot = env.scene["robot"]
+    # World position of the centered fingertip frame
+    ee_pos = robot.data.body_pos_w[:, robot.body_names.index("panda_fingertip_centered")]
+    
+    # 2. Update the marker positions in the GUI
+    # Note: env.scene["ee_marker"] must exist in your SceneCfg
+    env.scene["ee_marker"].visualize(translations=ee_pos)
+    
+    # Observations must return a tensor, so return a dummy or the pos itself
+    return ee_pos - env.scene.env_origins
+

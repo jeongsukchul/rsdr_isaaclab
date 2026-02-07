@@ -9,7 +9,14 @@
 
 import argparse
 import sys
+import sys
+# import numpy as np
 
+# # This bridges the gap between Isaac Lab (NumPy 1.x) and newer checkpoints (NumPy 2.x)
+# sys.modules["numpy._core"] = np.core
+# -------------------------------------
+
+# ... rest of your imports
 from isaaclab.app import AppLauncher
 
 # add argparse arguments
@@ -121,7 +128,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             return
     elif args_cli.checkpoint is None:
         # specify directory for logging runs
-        run_dir = agent_cfg["params"]["config"].get("full_experiment_name", ".*")
+        # run_dir = agent_cfg["params"]["config"].get("full_experiment_name", ".*")
+        seed = agent_cfg["params"]["seed"]
+        seed = None
+        run_dir = f"{args_cli.task}-rl_games-seed={seed}"
+
         # specify name of checkpoint
         if args_cli.use_last_checkpoint:
             checkpoint_file = ".*"
@@ -129,6 +140,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             # this loads the best checkpoint
             checkpoint_file = f"{agent_cfg['params']['config']['name']}.pth"
         # get path to previous checkpoint
+        print("run dir", run_dir)
+        print("loog_root_path", log_root_path)
         resume_path = get_checkpoint_path(log_root_path, run_dir, checkpoint_file, other_dirs=["nn"])
     else:
         resume_path = retrieve_file_path(args_cli.checkpoint)

@@ -29,7 +29,8 @@ from rsdr_isaaclab.tasks.manager_based.factory.factory_tasks_cfg import FactoryT
 from rsdr_isaaclab.tasks.manager_based.factory.factory_tasks_cfg import ASSET_DIR, PegInsert, GearMesh, NutThread, FactoryTask
 from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
-
+from isaaclab.markers import VisualizationMarkersCfg
+from isaaclab.markers.config import FRAME_MARKER_CFG
 # -------------------------------------------------------------------------
 # Scene Configuration
 # -------------------------------------------------------------------------
@@ -347,6 +348,7 @@ class FactoryObservationsCfg:
         )
         prev_actions = ObsTerm(func=mdp.last_action)
 
+
     policy: PolicyCfg = PolicyCfg()
     critic: CriticCfg = CriticCfg()
 @configclass
@@ -400,6 +402,12 @@ class FactoryEventCfg:
         }
     )
 
+    gui_debug_vis = EventTerm(
+        func=factory_events.update_debug_vis,
+        mode="interval",
+        interval_range_s=(0.02,0.02)
+    )
+
 
 # -------------------------------------------------------------------------
 # Base Environment Configuration
@@ -450,14 +458,33 @@ class FactoryEnvCfg(ManagerBasedRLEnvCfg):
                 "fixed_asset_cfg": SceneEntityCfg("fixed_asset"),
             },
         )
-        failure = mdp.CUrriculumTermCfg(
+        failure = mdp.CurriculumTermCfg(
             func=factory_metrics.log_grasp_stability,
             params={
                 "robot_cfg": SceneEntityCfg("robot"),
                 "held_asset_cfg": SceneEntityCfg("held_asset"),
             }
         )
-    
+        log_reward_components = mdp.CurriculumTermCfg(
+            func=factory_metrics.log_reward_components,
+        )
+        
+        factory_stats = mdp.CurriculumTermCfg(
+            func=factory_metrics.log_factory_statistics,
+            params={
+                "held_asset_cfg": SceneEntityCfg("held_asset"),
+                "fixed_asset_cfg": SceneEntityCfg("fixed_asset"),
+                "task_cfg": None, 
+            },
+        )
+        #For debug
+        spawn_sanity_check = mdp.CurriculumTermCfg(
+            func=factory_metrics.check_first_frame_stats,
+        )
+        # debug_obs_freshness = mdp.CurriculumTermCfg(
+        #    func=factory_metrics.debug_observation_freshness,
+        # )
+        
     
     curriculum: CurriculumCfg = CurriculumCfg()
 
@@ -536,7 +563,9 @@ def _apply_task_settings(env_cfg: FactoryEnvCfg, task_cfg: FactoryTask):
     env_cfg.scene.held_asset = task_cfg.held_asset
 
     env_cfg.scene.fixed_asset = task_cfg.fixed_asset
-
+    if task_cfg.name == "gear_mesh":
+        env_cfg.scene.small_gear = task_cfg.small_gear_cfg
+        env_cfg.scene.large_gear = task_cfg.large_gear_cfg
     # 4. Inject Rewards
     env_cfg.rewards = _build_rewards_cfg(task_cfg)
 
@@ -584,6 +613,7 @@ def _apply_task_settings(env_cfg: FactoryEnvCfg, task_cfg: FactoryTask):
     else:
         raise ValueError(f"no such task :  {task_cfg.name}")
     env_cfg.observations.critic.held_pos_rel_fixed.params["body_name"] = body_name
+    env_cfg.curriculum.factory_stats.params["task_cfg"] = task_cfg
 # -------------------------------------------------------------------------
 # Final Environment Configurations (Peg, Gear, Nut)
 # -------------------------------------------------------------------------
