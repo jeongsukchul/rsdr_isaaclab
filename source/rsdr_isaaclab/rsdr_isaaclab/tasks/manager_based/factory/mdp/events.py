@@ -321,6 +321,7 @@ from isaaclab.markers.config import FRAME_MARKER_CFG
 
 def update_debug_vis(env: ManagerBasedRLEnv, env_ids: torch.Tensor | None = None):
     # 1. Lazy Initialization
+    arm_action = env.action_manager.get_term("arm_action")
     if not hasattr(env, "debug_ee_marker"):
         marker_cfg = FRAME_MARKER_CFG.copy()
         marker_cfg.prim_path = "/Visuals/ee_frame"

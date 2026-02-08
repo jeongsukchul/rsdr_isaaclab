@@ -149,11 +149,10 @@ def factory_pose_alignment_reward(
 
 
 def factory_action_l2_penalty(env: ManagerBasedRLEnv) -> torch.Tensor:
-    return torch.norm(env.action_manager.action, p=2, dim=-1)
+    arm_action = env.action_manager.get_term("arm_action")
+    return torch.norm(arm_action.actions, p=2, dim=-1)
 
 
 def factory_action_rate_l2_penalty(env: ManagerBasedRLEnv) -> torch.Tensor:
-    # The ActionManager stores the previous action automatically
-    if env.action_manager.prev_action is None:
-        return torch.zeros(env.num_envs, device=env.device)
-    return torch.norm(env.action_manager.action - env.action_manager.prev_action, p=2, dim=-1)
+    arm_action = env.action_manager.get_term("arm_action")
+    return torch.norm(arm_action.action - arm_action.prev_action, p=2, dim=-1)

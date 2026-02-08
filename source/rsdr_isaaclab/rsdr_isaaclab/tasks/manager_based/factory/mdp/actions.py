@@ -58,6 +58,7 @@ class FactoryTaskSpaceControl(ActionTerm):
         # EMA smoothing (matching DirectRLEnv cfg.ema_factor)
         self.ema_factor = cfg.ema_factor
         self.actions = torch.zeros(self.num_envs, 6, device=self.device)
+        self.prev_actions = torch.zeros(self.num_envs, 6, device=self.device)
         
         # Control targets (matching DirectRLEnv)
         self.ctrl_target_fingertip_midpoint_pos = torch.zeros(self.num_envs, 3, device=self.device)
@@ -119,6 +120,14 @@ class FactoryTaskSpaceControl(ActionTerm):
         # Store task config for unidirectional_rot check
         self.unidirectional_rot = env.cfg.task.unidirectional_rot if hasattr(env.cfg.task, 'unidirectional_rot') else False
 
+        class ConfigWrapper:
+            class Scene:
+                num_envs = self.num_envs
+            scene = Scene()
+            ctrl = self.cfg  # Our action config has all ctrl parameters
+
+        
+        self._ctrl_cfg = ConfigWrapper()
     def _get_deriv_gains(self, prop_gains, rot_deriv_scale=1.0):
         """Compute derivative gains from proportional gains (matching DirectRLEnv factory_utils)."""
         deriv_gains = 2 * torch.sqrt(prop_gains)
@@ -144,6 +153,7 @@ class FactoryTaskSpaceControl(ActionTerm):
         # 1. Reset internal smoothing/EMA buffers
         self._raw_actions[env_ids] = 0.0
         self.actions[env_ids] = 0.0
+        self.prev_actions[env_ids] = 0.0
         
         # 2. Re-initialize observation noise for the fixed asset
         fixed_asset_pos_noise = torch.randn((len(env_ids), 3), device=self.device)
@@ -231,9 +241,11 @@ class FactoryTaskSpaceControl(ActionTerm):
         """Apply EMA smoothing and compute target poses (matching DirectRLEnv _pre_physics_step + _apply_action)."""
         self._raw_actions[:] = actions
         
+        self.prev_actions[:] = self.actions.clone()
         # Apply EMA smoothing (matching DirectRLEnv _pre_physics_step)
         self.actions[:] = self.ema_factor * actions + (1.0 - self.ema_factor) * self.actions
         
+        self._processed_actions[:] = self.actions  # Store smoothed actions for logging
         # Compute intermediate values if needed (matching DirectRLEnv)
         # Check if we need to re-compute velocities
         if self.last_update_timestamp < self._asset._data._sim_timestamp:
@@ -296,7 +308,6 @@ class FactoryTaskSpaceControl(ActionTerm):
             roll=target_euler_xyz[:, 0], pitch=target_euler_xyz[:, 1], yaw=target_euler_xyz[:, 2]
         )
         
-        self._processed_actions[:] = self.actions  # Store smoothed actions for logging
 
     def apply_actions(self):
         """Generate control signals using the exact DirectRLEnv compute_dof_torque function."""
@@ -305,18 +316,12 @@ class FactoryTaskSpaceControl(ActionTerm):
         self._compute_intermediate_values(dt=dt)
         # Create a cfg-like object for compute_dof_torque
         # (it needs cfg.scene.num_envs, cfg.*)
-        class TempCfg:
-            class Scene:
-                num_envs = self.num_envs
-            scene = Scene()
-            ctrl = self.cfg  # Our action config has all ctrl parameters
         
-        temp_cfg = TempCfg()
         # print("fingertip_midpoint_pos", self.fingertip_midpoint_pos)
         # print("ctrl_target_fingertip_midpoint_pos", self.ctrl_target_fingertip_midpoint_pos)
         # Use the exact DirectRLEnv compute_dof_torque function
         joint_torque, applied_wrench = factory_control.compute_dof_torque(
-            cfg=temp_cfg,  # Pass the env config (contains ctrl, scene, etc.)
+            cfg=self._ctrl_cfg,  # Pass the env config (contains ctrl, scene, etc.)
             dof_pos=self.joint_pos,
             dof_vel=self.joint_vel,
             fingertip_midpoint_pos=self.fingertip_midpoint_pos,

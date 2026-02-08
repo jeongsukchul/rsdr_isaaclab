@@ -130,7 +130,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         # specify directory for logging runs
         # run_dir = agent_cfg["params"]["config"].get("full_experiment_name", ".*")
         seed = agent_cfg["params"]["seed"]
-        seed = None
         run_dir = f"{args_cli.task}-rl_games-seed={seed}"
 
         # specify name of checkpoint
