@@ -131,7 +131,6 @@ def factory_pose_alignment_reward(
     is_close_or_below = z_disp < height_threshold
     
     result = torch.logical_and(is_centered, is_close_or_below)
-
     # 4. Rotation Check (Only for Nut Thread Success)
     if mode == "success" and factory_task_cfg.name == "nut_thread":
         # Get current fingertip yaw (DirectRLEnv uses fingertip_midpoint_quat for rot check)
@@ -155,4 +154,4 @@ def factory_action_l2_penalty(env: ManagerBasedRLEnv) -> torch.Tensor:
 
 def factory_action_rate_l2_penalty(env: ManagerBasedRLEnv) -> torch.Tensor:
     arm_action = env.action_manager.get_term("arm_action")
-    return torch.norm(arm_action.action - arm_action.prev_action, p=2, dim=-1)
+    return torch.norm(arm_action.actions - arm_action.prev_actions, p=2, dim=-1)

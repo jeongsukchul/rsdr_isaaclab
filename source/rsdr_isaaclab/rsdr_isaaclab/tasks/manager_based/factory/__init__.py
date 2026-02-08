@@ -13,7 +13,7 @@ from . import agents
 
 gym.register(
     id="Custom-Factory-PegInsert-v0",
-    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    entry_point="rsdr_isaaclab.tasks.manager_based.factory.factory_env_cfg:FactoryEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.factory_env_cfg:FactoryTaskPegInsertCfg",
@@ -23,7 +23,7 @@ gym.register(
 
 gym.register(
     id="Custom-Factory-GearMesh-v0",
-    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    entry_point="rsdr_isaaclab.tasks.manager_based.factory.factory_env_cfg:FactoryEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.factory_env_cfg:FactoryTaskGearMeshCfg",
@@ -33,7 +33,7 @@ gym.register(
 
 gym.register(
     id="Custom-Factory-NutThread-v0",
-    entry_point="isaaclab.envs:ManagerBasedRLEnv",
+    entry_point="rsdr_isaaclab.tasks.manager_based.factory.factory_env_cfg:FactoryEnv",
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.factory_env_cfg:FactoryTaskNutThreadCfg",

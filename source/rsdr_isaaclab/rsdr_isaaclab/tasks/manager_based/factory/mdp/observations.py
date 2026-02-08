@@ -52,16 +52,8 @@ def action_term_param(
     """
     Retrieves a LIVE parameter from the Action Term instance.
     """
-    # 1. Get the Term Instance
-    # Note: action_manager.action_terms is the dictionary mapping name -> term object
     action_term = env.action_manager.get_term(action_term_name)
 
-    # 2. Map 'task_prop_gains' request to the internal 'kp' tensor
-    # The config calls it 'task_prop_gains', but the class instance calls it 'kp'
-
-    
-    
-    # 3. Access the Live Attribute  
     if hasattr(action_term, param_name):
         val = getattr(action_term, param_name)
     else:
@@ -119,6 +111,7 @@ def body_world_lin_vel(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> tor
 def body_world_ang_vel(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
     """Asset body angular velocity in world frame."""
     asset = env.scene[asset_cfg.name]
+    
     return asset.data.body_ang_vel_w[:, asset_cfg.body_ids[0]]
 
 def joint_pos(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tensor:
@@ -139,10 +132,8 @@ def root_quat_w(env: ManagerBasedRLEnv, asset_cfg: SceneEntityCfg) -> torch.Tens
 
 def last_action(env: ManagerBasedRLEnv, action_name: str | None = None) -> torch.Tensor:
     """The last input action to the environment."""
-    if action_name is None:
-        return env.action_manager.action
-    else:
-        return env.action_manager.get_term(action_name).raw_actions
+    arm_action = env.action_manager.get_term("arm_action")
+    return arm_action.actions
     
 def visualize_frames(env: ManagerBasedRLEnv):
     # 1. Get current world positions

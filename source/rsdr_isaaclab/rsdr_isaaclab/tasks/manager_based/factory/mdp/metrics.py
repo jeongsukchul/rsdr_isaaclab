@@ -14,7 +14,6 @@ if TYPE_CHECKING:
 
 from ..factory_utils import get_held_base_pose, get_target_held_base_pose, wrap_yaw
 import isaacsim.core.utils.torch as torch_utils
-
 def log_factory_success_metrics(
     env: ManagerBasedRLEnv,
     env_ids: torch.Tensor,
@@ -56,43 +55,90 @@ def log_factory_success_metrics(
         curr_yaw = wrap_yaw(curr_yaw)
         curr_successes &= (curr_yaw < factory_task_cfg.ee_success_yaw)
 
-    # 3. Handle Logging on Reset (Sync with RL Games 'success' key)
-    reset_ids = env.termination_manager.terminated.nonzero(as_tuple=False).squeeze(-1)
-    
-    if len(reset_ids) > 0:
-        # RL Games looks for 'success' in env.extras
-        env.extras["success"] = curr_successes.float().mean()
-        
-        # Log Reward Penalties for debugging
-        # We access the current actions from the ActionManager
-        actions = env.action_manager.action
-        env.extras["action_penalty"] = torch.norm(actions, p=2, dim=-1).mean()
-        
-        # Reset tracking for these envs
+    env.extras["success_instant"] = curr_successes.float().mean()
+    first_success = curr_successes & ~env.ep_succeeded
+    env.ep_succeeded |= curr_successes
+    fs_ids = first_success.nonzero(as_tuple=False).squeeze(-1)
+    if fs_ids.numel() > 0:
+        env.ep_success_times[fs_ids] = env.episode_length_buf[fs_ids]
+    reset_ids = env_ids    
+    if reset_ids.numel() > 0:
+        # episode success (latched)
+        env.extras["success"] = env.ep_succeeded[reset_ids].float().mean()
+
+        succ_mask = env.ep_succeeded[reset_ids]
+        if succ_mask.any():
+            env.extras["success_times"] = env.ep_success_times[reset_ids[succ_mask]].float().mean()
+
+        # reset trackers
         env.ep_succeeded[reset_ids] = False
         env.ep_success_times[reset_ids] = 0
+    return log_factory_metrics_direct_style(env, env_ids, curr_successes)
 
-    # 4. Success Timing logic
-    first_success = curr_successes & ~env.ep_succeeded
-    env.ep_succeeded[curr_successes] = True
-    
+def log_factory_metrics_direct_style(
+    env: ManagerBasedRLEnv,
+    env_ids: torch.Tensor,  # ignore unless you KNOW it's reset ids
+    curr_successes: torch.Tensor,  # [num_envs] bool
+):
+    # Buffers (match Direct semantics; dtype can be long)
+    if not hasattr(env, "ep_succeeded"):
+        env.ep_succeeded = torch.zeros((env.num_envs,), dtype=torch.long, device=env.device)
+        env.ep_success_times = torch.zeros((env.num_envs,), dtype=torch.long, device=env.device)
+
+    # --- Direct: first_success = curr_successes & ~ep_succeeded ---
+    first_success = curr_successes & torch.logical_not(env.ep_succeeded.bool())
+    env.ep_succeeded[curr_successes] = 1
+
     first_success_ids = first_success.nonzero(as_tuple=False).squeeze(-1)
-    if len(first_success_ids) > 0:
+    if first_success_ids.numel() > 0:
         env.ep_success_times[first_success_ids] = env.episode_length_buf[first_success_ids]
 
-    # 5. Average success time
     nonzero_success_ids = env.ep_success_times.nonzero(as_tuple=False).squeeze(-1)
-    if len(nonzero_success_ids) > 0:
-        env.extras["success_times"] = env.ep_success_times[nonzero_success_ids].float().mean()
+    if nonzero_success_ids.numel() > 0:
+        env.extras["success_times"] = env.ep_success_times[nonzero_success_ids].sum() / nonzero_success_ids.numel()
 
-    current_mean_success = curr_successes.float().mean()
-    
-    # Optional: Update 'success' every step if you want a live curve, 
-    # not just on reset. RL Games usually likes the 'on reset' value though.
-    if "success" not in env.extras:
-         env.extras["success"] = current_mean_success
+    done = env.termination_manager.terminated.clone()
+    for attr in ["time_outs", "timeouts", "truncated", "truncations"]:
+        if hasattr(env.termination_manager, attr):
+            done |= getattr(env.termination_manager, attr)
 
-    return env.extras["success"] # Ensure this holds a scalar!
+    env.extras["debug/done_sum"] = done.float().sum()
+    env.extras["debug/done_is_all_or_none"] = ((done.all() | (~done).all()).float())
+    # If your env is sync-reset, done is either all true or all false
+    reset_ids = env_ids
+    if reset_ids.numel() == env.num_envs:
+        env.extras["successes"] = torch.count_nonzero(curr_successes) / env.num_envs
+    else:
+        # per-env reset: closest analog
+        env.extras["successes"] = torch.count_nonzero(curr_successes[reset_ids]) / reset_ids.numel()
+
+    # Reset buffers for those envs (Direct does this in _pre_physics_step)
+    env.ep_succeeded[reset_ids] = 0
+    env.ep_success_times[reset_ids] = 0
+
+    return env.extras.get("successes", torch.tensor(0.0, device=env.device))
+import torch
+def log_episode_returns(env, env_ids: torch.Tensor):
+    device = env.device
+
+    # During the very first reset before stepping, reward_manager may exist but sums are zero -> fine.
+    if not hasattr(env, "reward_manager") or not hasattr(env.reward_manager, "_episode_sums"):
+        env.extras["episode_return"] = torch.tensor(0.0, device=device)
+        return env.extras["episode_return"]
+
+    # total episodic return per env = sum over terms of RewardManager._episode_sums[term]
+    total = torch.zeros(env.num_envs, device=device)
+    for v in env.reward_manager._episode_sums.values():
+        total += v
+
+    if env_ids.numel() > 0:
+        env.extras["episode_return"] = total[env_ids].mean()
+    else:
+        # no reset happening right now
+        env.extras.setdefault("episode_return", torch.tensor(0.0, device=device))
+
+    return env.extras["episode_return"]
+
 
 def log_grasp_stability(
     env: ManagerBasedRLEnv,
@@ -121,17 +167,17 @@ def log_grasp_stability(
 
     return grasp_dist.mean()
 
-def log_reward_components(env: ManagerBasedRLEnv, env_ids):
-    """Log individual reward components to see which one is non-zero."""
-    # We look at the extras where we stored them in our reward function
-    if "log" in env.extras:
-        for key in ["kp_baseline", "kp_coarse", "kp_fine"]:
-            if key in env.extras["log"]:
-                 env.extras[f"debug/rew_{key}"] = env.extras["log"][key].mean()
-    return torch.tensor(0.0, device=env.device)
+# def log_reward_components(env, env_ids):
+#     """Log individual reward components to see which one is non-zero."""
+#     # We look at the extras where we stored them in our reward function
+#     if "log" in env.extras:
+#         for key in ["kp_baseline", "kp_coarse", "kp_fine"]:
+#             if key in env.extras["log"]:
+#                  env.extras[f"debug/rew_{key}"] = env.extras["log"][key].mean()
+#     return torch.tensor(0.0, device=env.device)
 
 
-def check_first_frame_stats(env: ManagerBasedRLEnv, env_ids: torch.Tensor):
+def check_first_frame_stats(env: ManagerBaFactoryEnvsedRLEnv, env_ids: torch.Tensor):
     """
     Sanity check that runs ONLY on the first step of an episode.
     Prints warnings if spawn velocity is high (explosion) or if spawn variance is zero (no noise).
@@ -208,7 +254,7 @@ def unpack_obs_group(env, group_name="critic"):
         
     return obs_dict
 
-def debug_observation_freshness(env: ManagerBasedRLEnv, env_ids):
+def debug_observation_freshness(env, env_ids):
     """
     Checks if observations are stale by teleporting the robot and 
     verifying if the observation updates immediately.
@@ -252,112 +298,112 @@ def debug_observation_freshness(env: ManagerBasedRLEnv, env_ids):
 
     return torch.tensor(0.0, device=env.device)
 
-import torch
-from isaaclab.envs import ManagerBasedRLEnv
-from isaaclab.managers import SceneEntityCfg
-from .. import factory_utils  # Ensure you have your utils imported
+# import torch
+# from isaaclab.envs import ManagerBasedRLEnv
+# from isaaclab.managers import SceneEntityCfg
+# from .. import factory_utils  # Ensure you have your utils imported
 
-def log_factory_statistics(
-    env: ManagerBasedRLEnv,
-    env_ids: torch.Tensor,
-    held_asset_cfg: SceneEntityCfg,
-    fixed_asset_cfg: SceneEntityCfg,
-    task_cfg: object, # Pass the Task Config object (PegInsert, etc.)
-):
-    """
-    Replicates FactoryEnv._log_factory_metrics completely.
-    Tracks:
-    1. Instantaneous Success (curr_successes)
-    2. Latched Success (ep_succeeded) - Did it succeed at least once this episode?
-    3. Time to First Success (success_times)
-    4. Success Rate on Reset
-    """
-    # --- 1. State Initialization (Monkey-Patching) ---
-    # We attach buffers to the env object if they don't exist yet
-    if not hasattr(env, "factory_ep_succeeded"):
-        env.factory_ep_succeeded = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
-        env.factory_ep_success_times = torch.zeros(env.num_envs, dtype=torch.float, device=env.device)
+# def log_factory_statistics(
+#     env: ManagerBasedRLEnv,
+#     env_ids: torch.Tensor,
+#     held_asset_cfg: SceneEntityCfg,
+#     fixed_asset_cfg: SceneEntityCfg,
+#     task_cfg: object, # Pass the Task Config object (PegInsert, etc.)
+# ):
+#     """
+#     Replicates FactoryEnv._log_factory_metrics completely.
+#     Tracks:
+#     1. Instantaneous Success (curr_successes)
+#     2. Latched Success (ep_succeeded) - Did it succeed at least once this episode?
+#     3. Time to First Success (success_times)
+#     4. Success Rate on Reset
+#     """
+#     # --- 1. State Initialization (Monkey-Patching) ---
+#     # We attach buffers to the env object if they don't exist yet
+#     if not hasattr(env, "factory_ep_succeeded"):
+#         env.factory_ep_succeeded = torch.zeros(env.num_envs, dtype=torch.bool, device=env.device)
+#         env.factory_ep_success_times = torch.zeros(env.num_envs, dtype=torch.float, device=env.device)
 
-    # --- 2. Calculate Current Success ---
-    # (Replicating _get_curr_successes logic)
-    held_asset = env.scene[held_asset_cfg.name]
-    fixed_asset = env.scene[fixed_asset_cfg.name]
+#     # --- 2. Calculate Current Success ---
+#     # (Replicating _get_curr_successes logic)
+#     held_asset = env.scene[held_asset_cfg.name]
+#     fixed_asset = env.scene[fixed_asset_cfg.name]
     
-    held_pos = held_asset.data.root_pos_w - env.scene.env_origins
-    held_quat = held_asset.data.root_quat_w
-    fixed_pos = fixed_asset.data.root_pos_w - env.scene.env_origins
-    fixed_quat = fixed_asset.data.root_quat_w
+#     held_pos = held_asset.data.root_pos_w - env.scene.env_origins
+#     held_quat = held_asset.data.root_quat_w
+#     fixed_pos = fixed_asset.data.root_pos_w - env.scene.env_origins
+#     fixed_quat = fixed_asset.data.root_quat_w
 
-    held_base_pos, _ = factory_utils.get_held_base_pose(
-        held_pos, held_quat, task_cfg.name, task_cfg.fixed_asset_cfg, env.num_envs, env.device
-    )
-    target_held_base_pos, _ = factory_utils.get_target_held_base_pose(
-        fixed_pos, fixed_quat, task_cfg.name, task_cfg.fixed_asset_cfg, env.num_envs, env.device
-    )
+#     held_base_pos, _ = factory_utils.get_held_base_pose(
+#         held_pos, held_quat, task_cfg.name, task_cfg.fixed_asset_cfg, env.num_envs, env.device
+#     )
+#     target_held_base_pos, _ = factory_utils.get_target_held_base_pose(
+#         fixed_pos, fixed_quat, task_cfg.name, task_cfg.fixed_asset_cfg, env.num_envs, env.device
+#     )
 
-    xy_dist = torch.linalg.vector_norm(target_held_base_pos[:, 0:2] - held_base_pos[:, 0:2], dim=1)
-    z_disp = held_base_pos[:, 2] - target_held_base_pos[:, 2]
+#     xy_dist = torch.linalg.vector_norm(target_held_base_pos[:, 0:2] - held_base_pos[:, 0:2], dim=1)
+#     z_disp = held_base_pos[:, 2] - target_held_base_pos[:, 2]
 
-    # Success Threshold Checks
-    is_centered = xy_dist < 0.0025
+#     # Success Threshold Checks
+#     is_centered = xy_dist < 0.0025
     
-    # Handle task-specific height thresholds
-    fixed_cfg = task_cfg.fixed_asset_cfg
-    if task_cfg.name == "nut_thread":
-        height_thresh = fixed_cfg.thread_pitch * task_cfg.success_threshold
-    else: # Peg / Gear
-        height_thresh = fixed_cfg.height * task_cfg.success_threshold
+#     # Handle task-specific height thresholds
+#     fixed_cfg = task_cfg.fixed_asset_cfg
+#     if task_cfg.name == "nut_thread":
+#         height_thresh = fixed_cfg.thread_pitch * task_cfg.success_threshold
+#     else: # Peg / Gear
+#         height_thresh = fixed_cfg.height * task_cfg.success_threshold
         
-    is_close_or_below = z_disp < height_thresh
-    curr_successes = is_centered & is_close_or_below
+#     is_close_or_below = z_disp < height_thresh
+#     curr_successes = is_centered & is_close_or_below
 
-    # [Nut Thread] Add Rotation Check
-    if task_cfg.name == "nut_thread":
-        # Check yaw angle
-        robot = env.scene["robot"]
-        # Assuming you have the body index stored or find it
-        fingertip_body_idx = robot.body_names.index("panda_fingertip_centered")
+#     # [Nut Thread] Add Rotation Check
+#     if task_cfg.name == "nut_thread":
+#         # Check yaw angle
+#         robot = env.scene["robot"]
+#         # Assuming you have the body index stored or find it
+#         fingertip_body_idx = robot.body_names.index("panda_fingertip_centered")
             
-        fingertip_quat = robot.data.body_quat_w[:, fingertip_body_idx]
-        from isaacsim.core.utils.torch import get_euler_xyz
-        _, _, curr_yaw = get_euler_xyz(fingertip_quat)
-        curr_yaw = factory_utils.wrap_yaw(curr_yaw)
-        is_rotated = curr_yaw < task_cfg.ee_success_yaw
-        curr_successes = curr_successes & is_rotated
+#         fingertip_quat = robot.data.body_quat_w[:, fingertip_body_idx]
+#         from isaacsim.core.utils.torch import get_euler_xyz
+#         _, _, curr_yaw = get_euler_xyz(fingertip_quat)
+#         curr_yaw = factory_utils.wrap_yaw(curr_yaw)
+#         is_rotated = curr_yaw < task_cfg.ee_success_yaw
+#         curr_successes = curr_successes & is_rotated
 
-    # --- 3. Update Latched Statistics ---
-    # Identify environments that just succeeded for the first time this episode
-    first_success = curr_successes & ~env.factory_ep_succeeded
+#     # --- 3. Update Latched Statistics ---
+#     # Identify environments that just succeeded for the first time this episode
+#     first_success = curr_successes & ~env.factory_ep_succeeded
     
-    # Mark them as succeeded
-    env.factory_ep_succeeded[curr_successes] = True
+#     # Mark them as succeeded
+#     env.factory_ep_succeeded[curr_successes] = True
     
-    # Record the time (step count) of the first success
-    # Note: episode_length_buf tracks steps since reset
-    first_success_ids = first_success.nonzero(as_tuple=False).squeeze(-1)
-    if len(first_success_ids) > 0:
-        env.factory_ep_success_times[first_success_ids] = env.episode_length_buf[first_success_ids].float()
+#     # Record the time (step count) of the first success
+#     # Note: episode_length_buf tracks steps since reset
+#     first_success_ids = first_success.nonzero(as_tuple=False).squeeze(-1)
+#     if len(first_success_ids) > 0:
+#         env.factory_ep_success_times[first_success_ids] = env.episode_length_buf[first_success_ids].float()
 
-    # --- 4. Logging on Reset ---
-    # We check the reset buffer to find episodes that are finishing NOW
-    # reset_buf is usually populated by the TerminationManager before this runs
-    reset_ids = env.termination_manager.terminated.nonzero(as_tuple=False).squeeze(-1)
+#     # --- 4. Logging on Reset ---
+#     # We check the reset buffer to find episodes that are finishing NOW
+#     # reset_buf is usually populated by the TerminationManager before this runs
+#     reset_ids = env_ids
     
-    if len(reset_ids) > 0:
-        # A. Log Success Rate (Did they succeed at any point?)
-        success_rate = env.factory_ep_succeeded[reset_ids].float().mean()
-        env.extras["successes"] = success_rate
+#     if len(reset_ids) > 0:
+#         # A. Log Success Rate (Did they succeed at any point?)
+#         success_rate = env.factory_ep_succeeded[reset_ids].float().mean()
+#         env.extras["successes"] = success_rate
 
-        # B. Log Success Times (Only for those that succeeded)
-        # We filter the reset IDs to find which ones were successful
-        succeeded_mask = env.factory_ep_succeeded[reset_ids]
-        if succeeded_mask.any():
-            avg_time = env.factory_ep_success_times[reset_ids[succeeded_mask]].mean()
-            env.extras["success_times"] = avg_time
+#         # B. Log Success Times (Only for those that succeeded)
+#         # We filter the reset IDs to find which ones were successful
+#         succeeded_mask = env.factory_ep_succeeded[reset_ids]
+#         if succeeded_mask.any():
+#             avg_time = env.factory_ep_success_times[reset_ids[succeeded_mask]].mean()
+#             env.extras["success_times"] = avg_time
 
-        # C. Reset Buffers for next episode
-        env.factory_ep_succeeded[reset_ids] = False
-        env.factory_ep_success_times[reset_ids] = 0.0
+#         # C. Reset Buffers for next episode
+#         env.factory_ep_succeeded[reset_ids] = False
+#         env.factory_ep_success_times[reset_ids] = 0.0
 
-    # --- 5. Return Scalar (Required for CurriculumSystem) ---
-    return env.extras.get("successes", torch.tensor(0.0, device=env.device))
+#     # --- 5. Return Scalar (Required for CurriculumSystem) ---
+#     return env.extras.get("successes", torch.tensor(0.0, device=env.device))

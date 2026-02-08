@@ -416,7 +416,6 @@ class FactoryEnv(DirectRLEnv):
             rew_buf += rew_dict[rew_name] * rew_scales[rew_name]
 
         self.prev_actions = self.actions.clone()
-
         self._log_factory_metrics(rew_dict, curr_successes)
         return rew_buf
 
@@ -463,7 +462,6 @@ class FactoryEnv(DirectRLEnv):
         action_penalty_ee = torch.norm(self.actions, p=2)
         action_grad_penalty = torch.norm(self.actions - self.prev_actions, p=2, dim=-1)
         curr_engaged = self._get_curr_successes(success_threshold=self.cfg_task.engage_threshold, check_rot=False)
-
         rew_dict = {
             "kp_baseline": factory_utils.squashing_fn(keypoint_dist, a0, b0),
             "kp_coarse": factory_utils.squashing_fn(keypoint_dist, a1, b1),

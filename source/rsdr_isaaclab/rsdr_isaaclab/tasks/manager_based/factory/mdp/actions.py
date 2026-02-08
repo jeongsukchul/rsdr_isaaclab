@@ -317,8 +317,6 @@ class FactoryTaskSpaceControl(ActionTerm):
         # Create a cfg-like object for compute_dof_torque
         # (it needs cfg.scene.num_envs, cfg.*)
         
-        # print("fingertip_midpoint_pos", self.fingertip_midpoint_pos)
-        # print("ctrl_target_fingertip_midpoint_pos", self.ctrl_target_fingertip_midpoint_pos)
         # Use the exact DirectRLEnv compute_dof_torque function
         joint_torque, applied_wrench = factory_control.compute_dof_torque(
             cfg=self._ctrl_cfg,  # Pass the env config (contains ctrl, scene, etc.)
@@ -337,7 +335,6 @@ class FactoryTaskSpaceControl(ActionTerm):
             device=self.device,
             dead_zone_thresholds=self.dead_zone_thresholds,
         )
-        # print(self._asset.data.joint_pos[0, 7:])
         # Set gripper position target (matching DirectRLEnv generate_ctrl_signals)
         self.ctrl_target_joint_pos[:] = self.joint_pos
         self.ctrl_target_joint_pos[:, 7:9] = 0.0  # Close gripper

@@ -2,6 +2,8 @@
 # All rights reserved.
 #
 # SPDX-License-Identifier: BSD-3-Clause
+from __future__ import annotations
+from typing import TYPE_CHECKING
 
 import isaaclab.sim as sim_utils
 from isaaclab.assets import ArticulationCfg
@@ -20,8 +22,10 @@ from isaaclab.actuators import ImplicitActuatorCfg
 import isaaclab.envs.mdp as mdp
 
 # --- Custom MDP Imports ---
+from rsdr_isaaclab.tasks.manager_based.factory.samplers.sampler import LearnableSampler
 from rsdr_isaaclab.tasks.manager_based.factory import mdp as factory_mdp
 from rsdr_isaaclab.tasks.manager_based.factory.mdp import actions as factory_actions
+from rsdr_isaaclab.tasks.manager_based.factory.mdp import randomization
 from rsdr_isaaclab.tasks.manager_based.factory.mdp import events as factory_events
 from rsdr_isaaclab.tasks.manager_based.factory.mdp import metrics as factory_metrics
 from rsdr_isaaclab.tasks.manager_based.factory.factory_tasks_cfg import FactoryTask
@@ -31,9 +35,23 @@ from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.markers import VisualizationMarkersCfg
 from isaaclab.markers.config import FRAME_MARKER_CFG
+from isaaclab.envs import ManagerBasedRLEnv
 # -------------------------------------------------------------------------
 # Scene Configuration
 # -------------------------------------------------------------------------
+
+class FactoryEnv(ManagerBasedRLEnv):
+    def __init__(self, cfg, **kwargs):
+        # 1. Init Base
+        super().__init__(cfg, **kwargs)
+
+        # 2. Initialize the Sampler from Config
+        # This creates the Neural Network / Learnable Parameters on the correct device
+        if hasattr(cfg, "randomization"):
+            self.sampler = LearnableSampler(cfg.randomization, self.device)
+        else:
+            self.sampler = None
+
 @configclass
 class FactorySceneCfg(InteractiveSceneCfg):
     """Configuration for the Factory Scene (Robot + Assets)."""
@@ -361,38 +379,60 @@ class ObsRandCfg:
 @configclass
 class FactoryEventCfg:
     """Events for Reset and Domain Randomization."""
-    startup_layout = EventTerm(
-        func=factory_events.reset_factory_assets_with_ik,
-        mode="startup",
-        params={
-            "robot_cfg": SceneEntityCfg("robot"),
-            "held_asset_cfg": SceneEntityCfg("held_asset"),
-            "fixed_asset_cfg": SceneEntityCfg("fixed_asset"),
-            "task_cfg": None, 
-        }
-    )
-    reset_layout = EventTerm(
-        func=factory_events.reset_factory_assets_with_ik,
+    # startup_layout = EventTerm(
+    #     func=factory_events.reset_factory_assets_with_ik,
+    #     mode="startup",
+    #     params={
+    #         "robot_cfg": SceneEntityCfg("robot"),
+    #         "held_asset_cfg": SceneEntityCfg("held_asset"),
+    #         "fixed_asset_cfg": SceneEntityCfg("fixed_asset"),
+    #         "task_cfg": None, 
+    #     }
+    # )
+    # def update_sampler(env, env_ids):
+    #     env.sampler.update(
+    #         env.extras["dr_samples"][env_ids],
+    #         env.extras["episode_returns"][env_ids],
+    #     )
+    
+    # training_sampler = EventTerm(
+    #     func=update_sampler,
+    #     mode="reset",
+    # )
+    learned_reset = EventTerm(
+        func=randomization.apply_learned_randomization,
         mode="reset",
         params={
             "robot_cfg": SceneEntityCfg("robot"),
             "held_asset_cfg": SceneEntityCfg("held_asset"),
             "fixed_asset_cfg": SceneEntityCfg("fixed_asset"),
-            "task_cfg" : None, 
+            "task_cfg": None, # Injected in _apply_task_settings
+            # Note: The function looks for 'env.sampler'. 
+            # We don't pass it here because Configs must be static.
         }
     )
+    # reset_layout = EventTerm(
+    #     func=factory_events.reset_factory_assets_with_ik,
+    #     mode="reset",
+    #     params={
+    #         "robot_cfg": SceneEntityCfg("robot"),
+    #         "held_asset_cfg": SceneEntityCfg("held_asset"),
+    #         "fixed_asset_cfg": SceneEntityCfg("fixed_asset"),
+    #         "task_cfg" : None, 
+    #     }
+    # )
 
-    randomize_gains = EventTerm(
-        func=mdp.randomize_actuator_gains,
-        mode="reset",
-        params={
-            "asset_cfg": SceneEntityCfg("robot", joint_names="panda_joint.*"),
-            "stiffness_distribution_params": (0.75, 1.25),
-            "damping_distribution_params": (0.75, 1.25),
-            "operation": "scale",
-            "distribution": "uniform",
-        },
-    )
+    # randomize_gains = EventTerm(
+    #     func=mdp.randomize_actuator_gains,
+    #     mode="reset",
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("robot", joint_names="panda_joint.*"),
+    #         "stiffness_distribution_params": (0.75, 1.25),
+    #         "damping_distribution_params": (0.75, 1.25),
+    #         "operation": "scale",
+    #         "distribution": "uniform",
+    #     },
+    # )
     stabilize_inertia = EventTerm(
         func=factory_events.set_body_inertias,
         mode="startup",
@@ -402,16 +442,17 @@ class FactoryEventCfg:
         }
     )
 
-    gui_debug_vis = EventTerm(
-        func=factory_events.update_debug_vis,
-        mode="interval",
-        interval_range_s=(0.02,0.02)
-    )
+    # gui_debug_vis = EventTerm(
+    #     func=factory_events.update_debug_vis,
+    #     mode="interval",
+    #     interval_range_s=(0.02,0.02)
+    # )
 
 
 # -------------------------------------------------------------------------
 # Base Environment Configuration
 # -------------------------------------------------------------------------
+from .randomization_cfg import FactoryRandomizationCfg
 @configclass
 class FactoryEnvCfg(ManagerBasedRLEnvCfg):
     """Base Factory Environment Configuration."""
@@ -426,7 +467,7 @@ class FactoryEnvCfg(ManagerBasedRLEnvCfg):
     # Environment Settings
     decimation: int = 8
     episode_length_s: float = 5.0 # Placeholder, overwritten bFdefault_y task settings
-
+    randomization = FactoryRandomizationCfg = FactoryRandomizationCfg()
     @configclass
     class TerminationsCfg:
         # Time out based on episode_length_s
@@ -465,18 +506,18 @@ class FactoryEnvCfg(ManagerBasedRLEnvCfg):
                 "held_asset_cfg": SceneEntityCfg("held_asset"),
             }
         )
-        log_reward_components = mdp.CurriculumTermCfg(
-            func=factory_metrics.log_reward_components,
-        )
+        # log_reward_components = mdp.CurriculumTermCfg(
+        #     func=factory_metrics.log_reward_components,
+        # )
         
-        factory_stats = mdp.CurriculumTermCfg(
-            func=factory_metrics.log_factory_statistics,
-            params={
-                "held_asset_cfg": SceneEntityCfg("held_asset"),
-                "fixed_asset_cfg": SceneEntityCfg("fixed_asset"),
-                "task_cfg": None, 
-            },
-        )
+        # factory_stats = mdp.CurriculumTermCfg(
+        #     func=factory_metrics.log_factory_statistics,
+        #     params={
+        #         "held_asset_cfg": SceneEntityCfg("held_asset"),
+        #         "fixed_asset_cfg": SceneEntityCfg("fixed_asset"),
+        #         "task_cfg": None, 
+        #     },
+        # )
         #For debug
         spawn_sanity_check = mdp.CurriculumTermCfg(
             func=factory_metrics.check_first_frame_stats,
@@ -485,7 +526,9 @@ class FactoryEnvCfg(ManagerBasedRLEnvCfg):
         #    func=factory_metrics.debug_observation_freshness,
         # )
         
-    
+        ep_return = mdp.CurriculumTermCfg(
+            func=factory_metrics.log_episode_returns,
+        )
     curriculum: CurriculumCfg = CurriculumCfg()
 
 # -------------------------------------------------------------------------
@@ -570,28 +613,28 @@ def _apply_task_settings(env_cfg: FactoryEnvCfg, task_cfg: FactoryTask):
     env_cfg.rewards = _build_rewards_cfg(task_cfg)
 
     # 5. Inject Friction Events
-    env_cfg.events.set_held_friction = EventTerm(
-        func=mdp.randomize_rigid_body_material,
-        mode="startup",
-        params={
-            "asset_cfg": SceneEntityCfg("held_asset"),
-            "static_friction_range": (task_cfg.held_asset_cfg.friction, task_cfg.held_asset_cfg.friction),
-            "dynamic_friction_range": (task_cfg.held_asset_cfg.friction, task_cfg.held_asset_cfg.friction),
-            "num_buckets": 1,
-            "restitution_range": (0.0, 0.0),
-        }
-    )
-    env_cfg.events.set_fixed_friction = EventTerm(
-        func=mdp.randomize_rigid_body_material,
-        mode="startup",
-        params={
-            "asset_cfg": SceneEntityCfg("fixed_asset"),
-            "static_friction_range": (task_cfg.fixed_asset_cfg.friction, task_cfg.fixed_asset_cfg.friction),
-            "dynamic_friction_range": (task_cfg.fixed_asset_cfg.friction, task_cfg.fixed_asset_cfg.friction),
-            "num_buckets": 1,
-            "restitution_range": (0.0, 0.0),
-        }
-    )
+    # env_cfg.events.set_held_friction = EventTerm(
+    #     func=mdp.randomize_rigid_body_material,
+    #     mode="reset",
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("held_asset"),
+    #         "static_friction_range": (task_cfg.held_asset_cfg.friction, task_cfg.held_asset_cfg.friction),
+    #         "dynamic_friction_range": (task_cfg.held_asset_cfg.friction, task_cfg.held_asset_cfg.friction),
+    #         "num_buckets": 1,
+    #         "restitution_range": (0.0, 0.0),
+    #     }
+    # )
+    # env_cfg.events.set_fixed_friction = EventTerm(
+    #     func=mdp.randomize_rigid_body_material,
+    #     mode="reset",
+    #     params={
+    #         "asset_cfg": SceneEntityCfg("fixed_asset"),
+    #         "static_friction_range": (task_cfg.fixed_asset_cfg.friction, task_cfg.fixed_asset_cfg.friction),
+    #         "dynamic_friction_range": (task_cfg.fixed_asset_cfg.friction, task_cfg.fixed_asset_cfg.friction),
+    #         "num_buckets": 1,
+    #         "restitution_range": (0.0, 0.0),
+    #     }
+    # )
 
     #FactoryEnv.__init__ -> set_body_inertias
     env_cfg.events.stabilize_inertia = EventTerm(
@@ -602,8 +645,8 @@ def _apply_task_settings(env_cfg: FactoryEnvCfg, task_cfg: FactoryTask):
             "offset_value": 0.01,
         }
     )
-    env_cfg.events.reset_layout.params["task_cfg"] = task_cfg
-    env_cfg.events.startup_layout.params["task_cfg"] = task_cfg
+    env_cfg.events.learned_reset.params["task_cfg"] = task_cfg
+    # env_cfg.events.startup_layout.params["task_cfg"] = task_cfg
     if task_cfg.name=="peg_insert":
         body_name="forge_round_peg_8mm"
     elif task_cfg.name=='gear_mesh':
@@ -613,7 +656,6 @@ def _apply_task_settings(env_cfg: FactoryEnvCfg, task_cfg: FactoryTask):
     else:
         raise ValueError(f"no such task :  {task_cfg.name}")
     env_cfg.observations.critic.held_pos_rel_fixed.params["body_name"] = body_name
-    env_cfg.curriculum.factory_stats.params["task_cfg"] = task_cfg
 # -------------------------------------------------------------------------
 # Final Environment Configurations (Peg, Gear, Nut)
 # -------------------------------------------------------------------------
@@ -624,6 +666,7 @@ class FactoryTaskPegInsertCfg(FactoryEnvCfg):
         super().__post_init__()
         task = PegInsert()
         _apply_task_settings(self, task)
+        self.randomization = FactoryRandomizationCfg(task_class=PegInsert)
 
 @configclass
 class FactoryTaskGearMeshCfg(FactoryEnvCfg):
@@ -631,6 +674,7 @@ class FactoryTaskGearMeshCfg(FactoryEnvCfg):
         super().__post_init__()
         task = GearMesh()
         _apply_task_settings(self, task)
+        self.randomization = FactoryRandomizationCfg(task_class=GearMesh)
 
 @configclass
 class FactoryTaskNutThreadCfg(FactoryEnvCfg):
@@ -640,3 +684,4 @@ class FactoryTaskNutThreadCfg(FactoryEnvCfg):
         _apply_task_settings(self, task)
         # Enable unidirectional rotation for Nut Threading
         self.actions.arm_action.unidirectional_rot = True
+        self.randomization = FactoryRandomizationCfg(task_class=NutThread)
