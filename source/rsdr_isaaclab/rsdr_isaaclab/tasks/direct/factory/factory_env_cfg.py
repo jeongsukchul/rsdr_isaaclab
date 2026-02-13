@@ -13,6 +13,7 @@ from isaaclab.sim.spawners.materials.physics_materials_cfg import RigidBodyMater
 from isaaclab.utils import configclass
 
 from .factory_tasks_cfg import ASSET_DIR, FactoryTask, GearMesh, NutThread, PegInsert
+from .randomization_cfg import FactoryRandomizationCfg
 
 OBS_DIM_CFG = {
     "fingertip_pos": 3,
@@ -186,6 +187,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
             ),
         },
     )
+    randomization = FactoryRandomizationCfg()
 
 
 @configclass

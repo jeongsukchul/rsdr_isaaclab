@@ -104,3 +104,88 @@ def update_debug_vis(env: ManagerBasedRLEnv, env_ids: torch.Tensor | None = None
     env.debug_ee_marker.visualize(translations=ee_pos, orientations=ee_quat)
 
 
+import torch
+import isaacsim.core.utils.torch as torch_utils
+import isaaclab.sim as sim_utils
+from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
+def viz_fixed_obs_and_action_frames(
+    env,
+    env_ids: torch.Tensor,
+    fixed_asset_cfg,
+    task_cfg,
+    noise_attr: str = "init_fixed_pos_obs_noise",   # must match what you actually use
+):
+    """Draw fixed_pos_obs_frame and fixed_pos_action_frame (=obs_frame + stored noise) in the viewport.
+
+    IMPORTANT:
+    - Positions in ManagerBased are usually world-frame already (root_pos_w).
+    - If your stored noise is in env-frame (like DirectRLEnv), adding it to world positions is still correct
+      because env-frame differs by translation only.
+    """
+
+    # ---- lazy-init markers (once) ----
+    if not hasattr(env, "_viz_fixed_frames"):
+        cfg = VisualizationMarkersCfg(
+            prim_path="/World/Visuals/fixed_frames_debug",
+            markers={
+                # green frame: obs frame
+                "obs": sim_utils.UsdFileCfg(
+                    usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/UIElements/frame_prim.usd",
+                    scale=(0.05, 0.05, 0.05),
+                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(0.0, 1.0, 0.0)),
+                ),
+                # red frame: action frame (obs + noise)
+                "action": sim_utils.UsdFileCfg(
+                    usd_path=f"{ISAAC_NUCLEUS_DIR}/Props/UIElements/frame_prim.usd",
+                    scale=(0.05, 0.05, 0.05),
+                    visual_material=sim_utils.PreviewSurfaceCfg(diffuse_color=(1.0, 0.0, 0.0)),
+                ),
+            },
+        )
+        env._viz_fixed_frames = VisualizationMarkers(cfg)
+
+    # ---- pick a small subset (otherwise 2*N markers every frame is heavy) ----
+    if env_ids.numel() == 0:
+        return
+
+    fixed_asset = env.scene[fixed_asset_cfg.name]
+    fixed_pos_w = fixed_asset.data.root_pos_w[env_ids]     # world frame
+    fixed_quat_w = fixed_asset.data.root_quat_w[env_ids]
+
+    # ---- compute fixed_pos_obs_frame (DirectRLEnv logic: bolt “tip” frame) ----
+    fixed_tip_pos_local = torch.zeros((env_ids.numel(), 3), device=env.device)
+    fixed_tip_pos_local[:, 2] = task_cfg.fixed_asset_cfg.height + task_cfg.fixed_asset_cfg.base_height
+    if task_cfg.name == "gear_mesh":
+        fixed_tip_pos_local[:, 0] = task_cfg.fixed_asset_cfg.medium_gear_base_offset[0]
+
+    identity_quat = torch.tensor([1.0, 0.0, 0.0, 0.0], device=env.device).repeat(env_ids.numel(), 1)
+    obs_quat_w, obs_pos_w = torch_utils.tf_combine(
+        q1=fixed_quat_w, t1=fixed_pos_w,
+        q2=identity_quat, t2=fixed_tip_pos_local,
+    )
+
+    # ---- action frame = obs frame + stored noise ----
+    noise = env.action_manager.get_term("arm_action").__getattribute__(noise_attr)
+     # noise is in env-frame (DirectRLEnv logic), so we can add directly to world-frame positions
+    if noise is None:
+        print("couldn't get the noise data!")
+        noise_sel = torch.zeros_like(obs_pos_w)
+    else:
+        noise_sel = noise[env_ids].to(obs_pos_w.dtype)
+
+    action_pos_w = obs_pos_w + noise_sel
+    action_quat_w = obs_quat_w
+
+    # ---- pack into marker arrays (2 markers per env) ----
+    translations = torch.cat([obs_pos_w, action_pos_w], dim=0).detach().cpu()
+    orientations = torch.cat([obs_quat_w, action_quat_w], dim=0).detach().cpu()
+    marker_indices = torch.tensor(
+        [0] * env_ids.numel() + [1] * env_ids.numel(),
+        dtype=torch.int64,
+    )
+
+    env._viz_fixed_frames.visualize(
+        translations=translations,
+        orientations=orientations,
+        marker_indices=marker_indices,
+    )

@@ -298,6 +298,70 @@ def debug_observation_freshness(env, env_ids):
 
     return torch.tensor(0.0, device=env.device)
 
+import torch
+import isaacsim.core.utils.torch as torch_utils
+
+def debug_gear_mesh_fixed_reference(env, env_ids, fixed_asset_cfg, task_cfg, obs_group="policy",
+                                   rel_key="fingertip_pos_rel_fixed"):
+    dev = env.device
+    N = env.num_envs
+    o = env.scene.env_origins
+
+    # 1) fingertip in env frame
+    robot = env.scene["robot"]
+    ft_idx = robot.body_names.index("panda_fingertip_centered")
+    ft_e = robot.data.body_pos_w[:, ft_idx] - o
+
+    # 2) infer what fixed reference your OBS is using
+    obs = env.observation_manager.compute()[obs_group]  # concatenated
+    # If you have unpack_obs_group, use it instead:
+    # obs_dict = unpack_obs_group(env, obs_group)
+    # rel = obs_dict[rel_key]
+
+    # --- minimal slice approach if you know rel_key exists as a term ---
+    obs_dict = unpack_obs_group(env, obs_group)
+    if rel_key not in obs_dict:
+        env.extras["dbg/missing_rel_key"] = torch.tensor(1.0, device=dev)
+        return torch.tensor(0.0, device=dev)
+
+    rel = obs_dict[rel_key]  # [N,3] (or wider; then take first 3)
+    rel = rel[:, :3]
+
+    fixed_ref_inferred = ft_e - rel
+
+    # 3) compute Direct-style fixed_pos_obs_frame (env frame)
+    fixed = env.scene[fixed_asset_cfg.name]
+    fixed_pos_e = fixed.data.root_pos_w - o
+    fixed_quat = fixed.data.root_quat_w
+
+    tip_local = torch.zeros((N, 3), device=dev)
+    tip_local[:, 2] = task_cfg.fixed_asset_cfg.height + task_cfg.fixed_asset_cfg.base_height
+    if task_cfg.name == "gear_mesh":
+        tip_local[:, 0] = task_cfg.fixed_asset_cfg.medium_gear_base_offset[0]
+
+    I = torch.tensor([1.0, 0.0, 0.0, 0.0], device=dev).repeat(N, 1)
+    _, fixed_obs_e = torch_utils.tf_combine(fixed_quat, fixed_pos_e, I, tip_local)
+
+    # 4) log error (mean over envs)
+    err = torch.norm(fixed_ref_inferred - fixed_obs_e, dim=1).mean()
+    env.extras["dbg/fixed_ref_err"] = err
+
+    # Optional: just for gear_mesh, watch the xy error too
+    env.extras["dbg/fixed_ref_xy_err"] = torch.norm(
+        (fixed_ref_inferred - fixed_obs_e)[:, :2], dim=1
+    ).mean()
+    err_vec = fixed_ref_inferred - fixed_obs_e     # [N,3]
+    env.extras["dbg/fixed_ref_err_x"] = err_vec[:,0].abs().mean()
+    env.extras["dbg/fixed_ref_err_y"] = err_vec[:,1].abs().mean()
+    env.extras["dbg/fixed_ref_err_z"] = err_vec[:,2].abs().mean()
+    off = task_cfg.fixed_asset_cfg.medium_gear_base_offset[0] if task_cfg.name == "gear_mesh" else 0.0
+
+    local = torch.tensor([off, 0.0, 0.0], device=env.device).repeat(env.num_envs, 1)
+    rot = torch_utils.quat_apply(fixed_quat, local)   # this is the correct “x offset in local frame”
+    env.extras["dbg/rot_off_norm"] = rot.norm(dim=1).mean()
+    mask = (env.episode_length_buf > 0)
+    return err
+
 # import torch
 # from isaaclab.envs import ManagerBasedRLEnv
 # from isaaclab.managers import SceneEntityCfg

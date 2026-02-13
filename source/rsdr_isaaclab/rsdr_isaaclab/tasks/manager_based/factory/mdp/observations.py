@@ -31,17 +31,14 @@ def body_pos_rel_fixed(
     # 1. Get Entities
     robot = env.scene[robot_cfg.name]
     
-    # 2. Get the Action Term to access the initialized noisy frame
-    action_term = env.action_manager.get_term(action_term_name)
-    
-    # Matching DirectRLEnv: noisy_fixed_pos = self.fixed_pos_obs_frame + self.init_fixed_pos_obs_noise
-    noisy_fixed_pos = action_term.fixed_pos_obs_frame + action_term.init_fixed_pos_obs_noise
-    # 3. Get Fingertip Position relative to world origin (env-frame)
-    # robot.data.body_pos_w is world-absolute; we need environment-relative
+    if not hasattr(env, "fixed_pos_obs_frame"):
+        env.fixed_pos_obs_frame = torch.zeros((env.num_envs, 3), device=env.device)
+    if not hasattr(env, "init_fixed_pos_obs_noise"):
+        env.init_fixed_pos_obs_noise = torch.zeros((env.num_envs, 3), device=env.device)
+    noisy_fixed_pos = env.fixed_pos_obs_frame + env.init_fixed_pos_obs_noise
     fingertip_body_idx = robot.body_names.index(body_name)
     fingertip_midpoint_pos = robot.data.body_pos_w[:, fingertip_body_idx] - env.scene.env_origins
     output = fingertip_midpoint_pos - noisy_fixed_pos
-    # 4. Compute Relative Position
     return output
 
 def action_term_param(

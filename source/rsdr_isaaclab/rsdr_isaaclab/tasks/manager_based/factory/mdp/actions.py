@@ -169,6 +169,8 @@ class FactoryTaskSpaceControl(ActionTerm):
         fixed_tip_pos_local = torch.zeros((len(env_ids), 3), device=self.device)
         fixed_tip_pos_local[:, 2] += self._env.cfg.task.fixed_asset_cfg.height + self._env.cfg.task.fixed_asset_cfg.base_height
         
+        if self._env.cfg.task.name == "gear_mesh":
+            fixed_tip_pos_local[:, 0] = self.cfg_task.fixed_asset_cfg.medium_gear_base_offset[0]
         _, fixed_tip_pos = torch_utils.tf_combine(
             fixed_quat, fixed_pos,
             torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(len(env_ids), 1),
@@ -185,6 +187,12 @@ class FactoryTaskSpaceControl(ActionTerm):
         self.ee_linvel_fd[env_ids] = 0.0
         self.ee_angvel_fd[env_ids] = 0.0
 
+         # 6) initialize control targets to current pose (prevents reset jerk)
+        self.ctrl_target_fingertip_midpoint_pos[env_ids] = self.fingertip_midpoint_pos[env_ids]
+        self.ctrl_target_fingertip_midpoint_quat[env_ids] = self.fingertip_midpoint_quat[env_ids]
+
+        # 7) make timestamp consistent
+        self.last_update_timestamp = self._asset._data._sim_timestamp
     def _compute_intermediate_values(self, dt: float):
         """
         Compute intermediate values from raw tensors (matching DirectRLEnv).
@@ -312,8 +320,8 @@ class FactoryTaskSpaceControl(ActionTerm):
     def apply_actions(self):
         """Generate control signals using the exact DirectRLEnv compute_dof_torque function."""
         # Ensure intermediate values are up to date
-        dt = self._env.physics_dt
-        self._compute_intermediate_values(dt=dt)
+        if self.last_update_timestamp < self._asset._data._sim_timestamp:
+            self._compute_intermediate_values(dt=self._env.physics_dt)
         # Create a cfg-like object for compute_dof_torque
         # (it needs cfg.scene.num_envs, cfg.*)
         
@@ -346,45 +354,6 @@ class FactoryTaskSpaceControl(ActionTerm):
         self._asset.set_joint_position_target(self.ctrl_target_joint_pos)
         self._asset.set_joint_effort_target(joint_torque)
 
-    def reset(self, env_ids: torch.Tensor | None = None) -> None:
-        if env_ids is None:
-            env_ids = torch.arange(self.num_envs, device=self.device)
-        
-        # 1. Reset internal smoothing/EMA buffers
-        self._raw_actions[env_ids] = 0.0
-        self.actions[env_ids] = 0.0
-        
-        # 2. Re-initialize observation noise for the fixed asset
-        fixed_asset_pos_noise = torch.randn((len(env_ids), 3), device=self.device)
-        fixed_asset_pos_rand = torch.tensor(self.cfg.fixed_asset_pos_noise, device=self.device)
-        self.init_fixed_pos_obs_noise[env_ids] = fixed_asset_pos_noise @ torch.diag(fixed_asset_pos_rand)
-
-        # 3. Capture the post-event state for finite differencing
-        # We call this AFTER the Event Manager has teleported the robot
-        self._compute_intermediate_values(dt=self._env.physics_dt)
-        
-        # 4. Update the "Safety Box" center based on the new asset location
-        fixed_pos = self._fixed_asset.data.root_pos_w[env_ids] - self._env.scene.env_origins[env_ids]
-        fixed_quat = self._fixed_asset.data.root_quat_w[env_ids]
-        fixed_tip_pos_local = torch.zeros((len(env_ids), 3), device=self.device)
-        fixed_tip_pos_local[:, 2] += self._env.cfg.task.fixed_asset_cfg.height + self._env.cfg.task.fixed_asset_cfg.base_height
-        if self._env.cfg.task.name == "gear_mesh":
-            fixed_tip_pos_local[:, 0] = self.cfg_task.fixed_asset_cfg.medium_gear_base_offset[0]
-
-        _, fixed_tip_pos = torch_utils.tf_combine(
-            fixed_quat, 
-            fixed_pos,
-            torch.tensor([1.0, 0.0, 0.0, 0.0], device=self.device).repeat(len(env_ids), 1),
-            fixed_tip_pos_local
-        )
-        self.fixed_pos_obs_frame[env_ids] = fixed_tip_pos
-
-        # 5. Sync velocity buffers to zero for the start of the episode
-        self.prev_fingertip_pos[env_ids] = self.fingertip_midpoint_pos[env_ids].clone()
-        self.prev_fingertip_quat[env_ids] = self.fingertip_midpoint_quat[env_ids].clone()
-        self.prev_joint_pos[env_ids] = self.joint_pos[env_ids, 0:7].clone()
-        self.ee_linvel_fd[env_ids] = 0.0
-        self.ee_angvel_fd[env_ids] = 0.0
 
 
 # =============================================================================
@@ -411,7 +380,7 @@ class FactoryTaskSpaceControlCfg(ActionTermCfg):
     ema_factor: float = 0.2
     
     # Action bounds (matching DirectRLEnv cfg)
-    pos_action_bounds: list[float] = [0.05, 0.05, 0.05]
+    pos_action_bounds: list[float] = (0.05, 0.05)
     rot_action_bounds: list[float] = [1.0, 1.0, 1.0]
     
     # Action thresholds (matching DirectRLEnv cfg)

@@ -15,10 +15,12 @@ from isaaclab.envs import DirectRLEnv
 from isaaclab.sim.spawners.from_files import GroundPlaneCfg, spawn_ground_plane
 from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.utils.math import axis_angle_from_quat
+from rsdr_isaaclab.tasks.direct.samplers.sampler import LearnableSampler
 
 from . import factory_control, factory_utils
 from .factory_env_cfg import OBS_DIM_CFG, STATE_DIM_CFG, FactoryEnvCfg
 
+from . import randomization as dr_randomization
 
 class FactoryEnv(DirectRLEnv):
     cfg: FactoryEnvCfg
@@ -36,6 +38,7 @@ class FactoryEnv(DirectRLEnv):
         factory_utils.set_body_inertias(self._robot, self.scene.num_envs)
         self._init_tensors()
         self._set_default_dynamics_parameters()
+        self.sampler = LearnableSampler(cfg.randomization, self.device)
 
     def _set_default_dynamics_parameters(self):
         """Set parameters defining dynamic interactions."""
@@ -490,7 +493,8 @@ class FactoryEnv(DirectRLEnv):
         self._set_franka_to_default_pose(joints=self.cfg.ctrl.reset_joints, env_ids=env_ids)
         self.step_sim_no_action()
 
-        self.randomize_initial_state(env_ids)
+        dr_randomization.apply_learned_randomization(self, env_ids)
+
 
     def _set_assets_to_default_pose(self, env_ids):
         """Move assets to default pose before randomization."""
@@ -608,7 +612,8 @@ class FactoryEnv(DirectRLEnv):
         self.scene.update(dt=self.physics_dt)
         self._compute_intermediate_values(dt=self.physics_dt)
 
-    def randomize_initial_state(self, env_ids):
+    def randomize_initial_state(self, env_ids, master_values: torch.Tensor | None = None, gravity_z: float | None = None):
+
         """Randomize initial state and perform any episode-level randomization."""
         # Disable gravity.
         physics_sim_view = sim_utils.SimulationContext.instance().physics_sim_view
@@ -616,24 +621,40 @@ class FactoryEnv(DirectRLEnv):
 
         # (1.) Randomize fixed asset pose.
         fixed_state = self._fixed_asset.data.default_root_state.clone()[env_ids]
-        # (1.a.) Position
-        rand_sample = torch.rand((len(env_ids), 3), dtype=torch.float32, device=self.device)
-        fixed_pos_init_rand = 2 * (rand_sample - 0.5)  # [-1, 1]
-        fixed_asset_init_pos_rand = torch.tensor(
-            self.cfg_task.fixed_asset_init_pos_noise, dtype=torch.float32, device=self.device
-        )
-        fixed_pos_init_rand = fixed_pos_init_rand @ torch.diag(fixed_asset_init_pos_rand)
-        fixed_state[:, 0:3] += fixed_pos_init_rand + self.scene.env_origins[env_ids]
-        # (1.b.) Orientation
-        fixed_orn_init_yaw = np.deg2rad(self.cfg_task.fixed_asset_init_orn_deg)
-        fixed_orn_yaw_range = np.deg2rad(self.cfg_task.fixed_asset_init_orn_range_deg)
-        rand_sample = torch.rand((len(env_ids), 3), dtype=torch.float32, device=self.device)
-        fixed_orn_euler = fixed_orn_init_yaw + fixed_orn_yaw_range * rand_sample
-        fixed_orn_euler[:, 0:2] = 0.0  # Only change yaw.
-        fixed_orn_quat = torch_utils.quat_from_euler_xyz(
-            fixed_orn_euler[:, 0], fixed_orn_euler[:, 1], fixed_orn_euler[:, 2]
-        )
-        fixed_state[:, 3:7] = fixed_orn_quat
+        if master_values is None:
+            # (1.a) Position (original)
+            rand_sample = torch.rand((len(env_ids), 3), dtype=torch.float32, device=self.device)
+            fixed_pos_init_rand = 2 * (rand_sample - 0.5)  # [-1, 1]
+            fixed_asset_init_pos_rand = torch.tensor(
+                self.cfg_task.fixed_asset_init_pos_noise, dtype=torch.float32, device=self.device
+            )
+            fixed_pos_init_rand = fixed_pos_init_rand @ torch.diag(fixed_asset_init_pos_rand)
+            fixed_state[:, 0:3] += fixed_pos_init_rand + self.scene.env_origins[env_ids]
+
+            # (1.b) Orientation (original yaw range)
+            fixed_orn_init_yaw = np.deg2rad(self.cfg_task.fixed_asset_init_orn_deg)
+            fixed_orn_yaw_range = np.deg2rad(self.cfg_task.fixed_asset_init_orn_range_deg)
+            rand_sample = torch.rand((len(env_ids), 3), dtype=torch.float32, device=self.device)
+            fixed_orn_euler = fixed_orn_init_yaw + fixed_orn_yaw_range * rand_sample
+            fixed_orn_euler[:, 0:2] = 0.0
+            fixed_orn_quat = torch_utils.quat_from_euler_xyz(
+                fixed_orn_euler[:, 0], fixed_orn_euler[:, 1], fixed_orn_euler[:, 2]
+            )
+            fixed_state[:, 3:7] = fixed_orn_quat
+        else:
+            # Learned sampler version (Direct-identical semantics)
+            noise_fixed_pos = dr_randomization._extract_param(self.sampler, master_values, "fixed_pos_noise", self.device, default_dim=3)
+            noise_fixed_yaw = dr_randomization._extract_param(self.sampler, master_values, "fixed_yaw_noise", self.device, default_dim=1)
+
+            fixed_state[:, 0:3] += noise_fixed_pos + self.scene.env_origins[env_ids]
+
+            fixed_orn_init_yaw = np.deg2rad(self.cfg_task.fixed_asset_init_orn_deg)
+            fixed_yaw = fixed_orn_init_yaw + noise_fixed_yaw.squeeze(-1)
+            fixed_orn_quat = torch_utils.quat_from_euler_xyz(
+                torch.zeros_like(fixed_yaw), torch.zeros_like(fixed_yaw), fixed_yaw
+            )
+            fixed_state[:, 3:7] = fixed_orn_quat
+
         # (1.c.) Velocity
         fixed_state[:, 7:] = 0.0  # vel
         # (1.d.) Update values.
@@ -677,22 +698,42 @@ class FactoryEnv(DirectRLEnv):
             above_fixed_pos = fixed_tip_pos.clone()
             above_fixed_pos[:, 2] += self.cfg_task.hand_init_pos[2]
 
-            rand_sample = torch.rand((n_bad, 3), dtype=torch.float32, device=self.device)
-            above_fixed_pos_rand = 2 * (rand_sample - 0.5)  # [-1, 1]
-            hand_init_pos_rand = torch.tensor(self.cfg_task.hand_init_pos_noise, device=self.device)
-            above_fixed_pos_rand = above_fixed_pos_rand @ torch.diag(hand_init_pos_rand)
-            above_fixed_pos[bad_envs] += above_fixed_pos_rand
-
             # (b) get random orientation facing down
             hand_down_euler = (
                 torch.tensor(self.cfg_task.hand_init_orn, device=self.device).unsqueeze(0).repeat(n_bad, 1)
             )
 
-            rand_sample = torch.rand((n_bad, 3), dtype=torch.float32, device=self.device)
-            above_fixed_orn_noise = 2 * (rand_sample - 0.5)  # [-1, 1]
-            hand_init_orn_rand = torch.tensor(self.cfg_task.hand_init_orn_noise, device=self.device)
-            above_fixed_orn_noise = above_fixed_orn_noise @ torch.diag(hand_init_orn_rand)
-            hand_down_euler += above_fixed_orn_noise
+            if master_values is None:
+                # original sampling
+                rand_sample = torch.rand((n_bad, 3), dtype=torch.float32, device=self.device)
+                above_fixed_pos_rand = 2 * (rand_sample - 0.5)
+                hand_init_pos_rand = torch.tensor(self.cfg_task.hand_init_pos_noise, device=self.device)
+                above_fixed_pos_rand = above_fixed_pos_rand @ torch.diag(hand_init_pos_rand)
+                above_fixed_pos[bad_envs] += above_fixed_pos_rand
+
+                rand_sample = torch.rand((n_bad, 3), dtype=torch.float32, device=self.device)
+                above_fixed_orn_noise = 2 * (rand_sample - 0.5)
+                hand_init_orn_rand = torch.tensor(self.cfg_task.hand_init_orn_noise, device=self.device)
+                above_fixed_orn_noise = above_fixed_orn_noise @ torch.diag(hand_init_orn_rand)
+                hand_down_euler += above_fixed_orn_noise
+            else:
+                # learned sampler; resample ONLY for bad_envs each attempt (like your manager-based logic)
+                if ik_attempt > 0:
+                    new_vals = self.sampler.sample(n_bad)
+                    # overwrite ONLY the noise fields in master_values for these envs
+                    for p in self.sampler.cfg.params:
+                        if p.name in ("hand_init_pos_noise", "hand_init_orn_noise"):
+                            master_values[bad_envs][:, p.indices] = new_vals[:, p.indices]
+                    # keep extras consistent
+                    self.extras["dr_samples"][bad_envs] = master_values[bad_envs]
+                    self.extras["dr_log_probs"][bad_envs] = self.sampler.log_prob(master_values[bad_envs])
+
+                noise_hand_pos = dr_randomization._extract_param(self.sampler, master_values, "hand_init_pos_noise", self.device, default_dim=3)
+                noise_hand_orn = dr_randomization._extract_param(self.sampler, master_values, "hand_init_orn_noise", self.device, default_dim=3)
+
+                above_fixed_pos[bad_envs] += noise_hand_pos[bad_envs]
+                hand_down_euler += noise_hand_orn[bad_envs]
+
             hand_down_quat[bad_envs, :] = torch_utils.quat_from_euler_xyz(
                 roll=hand_down_euler[:, 0], pitch=hand_down_euler[:, 1], yaw=hand_down_euler[:, 2]
             )
@@ -757,13 +798,20 @@ class FactoryEnv(DirectRLEnv):
         )
 
         # Add asset in hand randomization
-        rand_sample = torch.rand((self.num_envs, 3), dtype=torch.float32, device=self.device)
-        held_asset_pos_noise = 2 * (rand_sample - 0.5)  # [-1, 1]
-        if self.cfg_task.name == "gear_mesh":
-            held_asset_pos_noise[:, 2] = -rand_sample[:, 2]  # [-1, 0]
+        if master_values is None:
+            # original
+            rand_sample = torch.rand((self.num_envs, 3), dtype=torch.float32, device=self.device)
+            held_asset_pos_noise = 2 * (rand_sample - 0.5)
+            if self.cfg_task.name == "gear_mesh":
+                held_asset_pos_noise[:, 2] = -rand_sample[:, 2]  # [-1, 0]
 
-        held_asset_pos_noise_level = torch.tensor(self.cfg_task.held_asset_pos_noise, device=self.device)
-        held_asset_pos_noise = held_asset_pos_noise @ torch.diag(held_asset_pos_noise_level)
+            held_asset_pos_noise_level = torch.tensor(self.cfg_task.held_asset_pos_noise, device=self.device)
+            held_asset_pos_noise = held_asset_pos_noise @ torch.diag(held_asset_pos_noise_level)
+        else:
+            held_asset_pos_noise = dr_randomization._extract_param(self.sampler, master_values, "held_pos_noise", self.device, default_dim=3)
+            if self.cfg_task.name == "gear_mesh":
+                held_asset_pos_noise[:, 2] = -torch.abs(held_asset_pos_noise[:, 2])
+
         translated_held_asset_quat, translated_held_asset_pos = torch_utils.tf_combine(
             q1=translated_held_asset_quat,
             t1=translated_held_asset_pos,

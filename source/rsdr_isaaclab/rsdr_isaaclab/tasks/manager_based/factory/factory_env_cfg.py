@@ -36,6 +36,7 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR
 from isaaclab.markers import VisualizationMarkersCfg
 from isaaclab.markers.config import FRAME_MARKER_CFG
 from isaaclab.envs import ManagerBasedRLEnv
+import torch
 # -------------------------------------------------------------------------
 # Scene Configuration
 # -------------------------------------------------------------------------
@@ -45,11 +46,17 @@ class FactoryEnv(ManagerBasedRLEnv):
         # 1. Init Base
         super().__init__(cfg, **kwargs)
 
+        self.fixed_pos_obs_frame = torch.zeros((self.num_envs, 3), device=self.device)
+        self.init_fixed_pos_obs_noise = torch.zeros((self.num_envs, 3), device=self.device)
+
+        # (optional but recommended if you use FD velocities / prev actions)
+        self.prev_actions = torch.zeros((self.num_envs, 6), device=self.device)
         # 2. Initialize the Sampler from Config
         # This creates the Neural Network / Learnable Parameters on the correct device
         if hasattr(cfg, "randomization"):
             self.sampler = LearnableSampler(cfg.randomization, self.device)
         else:
+            print("No sampler config found; not initializing sampler.")
             self.sampler = None
 
 @configclass
@@ -448,7 +455,15 @@ class FactoryEventCfg:
     #     interval_range_s=(0.02,0.02)
     # )
 
-
+    # gui_debug_vis2 = EventTerm(
+    #     func=factory_events.viz_fixed_obs_and_action_frames,
+    #     mode="interval",
+    #     params={
+    #         "fixed_asset_cfg": SceneEntityCfg("fixed_asset"),
+    #         "task_cfg": None, # Injected in _apply_task_settings
+    #     },
+    #     interval_range_s=(0.02,0.02)
+    # )
 # -------------------------------------------------------------------------
 # Base Environment Configuration
 # -------------------------------------------------------------------------
@@ -467,7 +482,7 @@ class FactoryEnvCfg(ManagerBasedRLEnvCfg):
     # Environment Settings
     decimation: int = 8
     episode_length_s: float = 5.0 # Placeholder, overwritten bFdefault_y task settings
-    randomization = FactoryRandomizationCfg = FactoryRandomizationCfg()
+    randomization : FactoryRandomizationCfg = FactoryRandomizationCfg()
     @configclass
     class TerminationsCfg:
         # Time out based on episode_length_s
@@ -525,7 +540,13 @@ class FactoryEnvCfg(ManagerBasedRLEnvCfg):
         # debug_obs_freshness = mdp.CurriculumTermCfg(
         #    func=factory_metrics.debug_observation_freshness,
         # )
-        
+        # debug_gear = mdp.CurriculumTermCfg(
+        #     func=factory_metrics.debug_gear_mesh_fixed_reference,
+        #     params={
+        #         "fixed_asset_cfg": SceneEntityCfg("fixed_asset"),
+        #         "task_cfg": None,
+        #     }
+        # )
         ep_return = mdp.CurriculumTermCfg(
             func=factory_metrics.log_episode_returns,
         )
@@ -646,6 +667,8 @@ def _apply_task_settings(env_cfg: FactoryEnvCfg, task_cfg: FactoryTask):
         }
     )
     env_cfg.events.learned_reset.params["task_cfg"] = task_cfg
+    # env_cfg.curriculum.debug_gear.params["task_cfg"] = task_cfg
+    # env_cfg.events.gui_debug_vis2.params["task_cfg"] = task_cfg
     # env_cfg.events.startup_layout.params["task_cfg"] = task_cfg
     if task_cfg.name=="peg_insert":
         body_name="forge_round_peg_8mm"
