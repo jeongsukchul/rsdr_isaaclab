@@ -45,7 +45,10 @@ class LearnableSampler(nn.Module):
     def log_prob(self, value: torch.Tensor) -> torch.Tensor:
     
         return self.current_dist.log_prob(value)
-
+    def volume(self, low, high):
+        diff = high - low
+        diff_safe = torch.where(diff == 0, torch.ones_like(diff), diff)
+        return diff_safe.prod()
     def update(self, contexts, returns):
         pass
     
@@ -166,7 +169,8 @@ class ADR(LearnableSampler):
         self.current_high.scatter_(0, dim_t, new_high)
 
         print(f"Current domain: Low = {self.current_low}, High = {self.current_high}")
-
+        print("Current domain volume:", np.prod((self.current_high - self.current_low).cpu().numpy()))
+        print("Reference domain volume:", np.prod((self.high - self.low).cpu().numpy()))
 
 class DORAEMON(LearnableSampler):
     def __init__(self, cfg, device: str,
@@ -177,6 +181,7 @@ class DORAEMON(LearnableSampler):
                  hard_performance_constraint: bool = True,
                  train_until_performance_lb: bool = True,
                  **kwargs):
+        device = torch.device("cpu")
         super().__init__(cfg, device)
         self.name = "DORAEMON"
         self.success_threshold = success_threshold
@@ -199,7 +204,7 @@ class DORAEMON(LearnableSampler):
 
     
     def _create_initial_distribution(self, init_beta_param):
-        return BetasDist(torch.ones(self.ndim) * init_beta_param, torch.ones(self.ndim) * init_beta_param, self.low, self.high)
+        return BetasDist(torch.ones(self.ndim, device=self.low.device) * init_beta_param, torch.ones(self.ndim, device=self.low.device) * init_beta_param, self.low, self.high)
 
     def _create_target_distribution(self):
         return UniformDist(self.low, self.high, self.device)
@@ -209,7 +214,8 @@ class DORAEMON(LearnableSampler):
 
     def get_test_dist(self):
         return self.target_dist
-
+    def entropy(self):
+        return self.current_dist.entropy().sum().item()
     def get_feasible_starting_distr(self, x0_opt, obj_fn, obj_fn_prime, kl_constraint_fn, kl_constraint_fn_prime):
         """
         Solves the inverted problem
@@ -312,16 +318,14 @@ class DORAEMON(LearnableSampler):
         print("Updating DORAEMON")
 
         # Convert to numpy and ensure double precision
-        contexts = torch.tensor(contexts, dtype=torch.float64)
-        returns = torch.tensor(returns, dtype=torch.float64)
+        contexts = contexts.detach().to(device=self.low.device, dtype=torch.float64)
+        returns  = returns.detach().to(device=self.low.device, dtype=torch.float64)
 
         print("Contexts shape:", contexts.shape)
         print("Returns shape:", returns.shape)
-        print("Contexts min/max:", contexts.min().item(), contexts.max().item())
-        print("Returns min/max:", returns.min().item(), returns.max().item())
+        print("Contexts mean/min/max:", contexts.mean().item(), contexts.min().item(), contexts.max().item())
+        print("Returns mean/min/max:", returns.mean().item(), returns.min().item(), returns.max().item())
 
-
-        
         """
             2. Optimize KL(phi_i+1 || phi_target) s.t. J(phi_i+1) > performance_bound & KL(phi_i+1 || phi_i) < KL_bound
         """
@@ -333,7 +337,7 @@ class DORAEMON(LearnableSampler):
             x = self._sigmoid(x_opt, self.min_bound, self.max_bound)
             proposed_distr = BetasDist.from_flat(x, self.low, self.high)
             kl_divergence = self.current_dist.kl_divergence(proposed_distr)
-            return kl_divergence.detach().numpy() 
+            return kl_divergence.detach().cpu().numpy() 
 
         def kl_constraint_fn_prime(x_opt):
             """Compute the derivative for the KL-divergence (used for scipy optimizer)."""
@@ -342,7 +346,7 @@ class DORAEMON(LearnableSampler):
             proposed_distr = BetasDist.from_flat(x, self.low, self.high)
             kl_divergence = self.current_dist.kl_divergence(proposed_distr)
             grads = torch.autograd.grad(kl_divergence, x_opt)
-            return np.concatenate([g.detach().numpy() for g in grads])
+            return np.concatenate([g.detach().cpu().numpy() for g in grads])
 
         constraints.append(
             NonlinearConstraint(
@@ -356,14 +360,18 @@ class DORAEMON(LearnableSampler):
 
         def performance_constraint_fn(x_opt):
             """Compute the expected performance under the proposed distribution."""
+            print("x_opt mean/min/max:", x_opt.mean().item(), x_opt.min().item(), x_opt.max().item())
+
             x = self._sigmoid(x_opt, self.min_bound, self.max_bound)
+            print("x mean/min/max:", x.mean().item(), x.min().item(), x.max().item())
             proposed_distr = BetasDist.from_flat(x, self.low, self.high)
             
             log_prob_proposed = proposed_distr.log_prob(contexts)
             log_prob_current = self.current_dist.log_prob(contexts)
             
             importance_sampling = torch.exp(log_prob_proposed - log_prob_current)
-            
+            print("log_prob_proposed mean/min/max:", log_prob_proposed.mean().item(), log_prob_proposed.min().item(), log_prob_proposed.max().item())
+            print("log_prob_current mean/min/max:", log_prob_current.mean().item(), log_prob_current.min().item(), log_prob_current.max().item())
             if torch.any(torch.isnan(importance_sampling)) or torch.any(torch.isinf(importance_sampling)):
                 print("Warning: NaN or Inf in importance sampling")
                 print("log_prob_proposed:", log_prob_proposed)
@@ -377,7 +385,7 @@ class DORAEMON(LearnableSampler):
                 print("Warning: NaN or Inf in performance")
                 performance = torch.tensor(0.0, dtype=torch.float64)
             
-            return performance.detach().numpy()
+            return performance.detach().cpu().numpy()
 
         def performance_constraint_fn_prime(x_opt):
             """Compute the derivative for the performance-constraint (used for scipy optimizer)."""
@@ -399,10 +407,10 @@ class DORAEMON(LearnableSampler):
             
             if torch.isnan(performance) or torch.isinf(performance):
                 print("Warning: NaN or Inf in performance (prime)")
-                return np.zeros_like(x_opt.detach().numpy())
+                return np.zeros_like(x_opt.detach().cpu().numpy())
             
             grads = torch.autograd.grad(performance, x_opt)
-            grad_np = np.concatenate([g.detach().numpy() for g in grads])
+            grad_np = np.concatenate([g.detach().cpu().numpy() for g in grads])
             
             if np.any(np.isnan(grad_np)) or np.any(np.isinf(grad_np)):
                 print("Warning: NaN or Inf in gradients")
@@ -432,16 +440,16 @@ class DORAEMON(LearnableSampler):
             
             if not torch.isfinite(kl_divergence):
                 print(f"Warning: Non-finite KL divergence detected: {kl_divergence}")
-                return float('inf'), np.zeros_like(x_opt.detach().numpy())
+                return float('inf'), np.zeros_like(x_opt.detach().cpu().numpy())
             
             grads = torch.autograd.grad(kl_divergence, x_opt, create_graph=True)
-            grad_np = np.concatenate([g.detach().numpy() for g in grads])
+            grad_np = np.concatenate([g.detach().cpu().numpy() for g in grads])
             
             if not np.isfinite(grad_np).all():
                 print(f"Warning: Non-finite gradient detected: {grad_np}")
-                return float('inf'), np.zeros_like(x_opt.detach().numpy())
+                return float('inf'), np.zeros_like(x_opt.detach().cpu().numpy())
             
-            return kl_divergence.detach().numpy(), grad_np
+            return kl_divergence.detach().cpu().numpy(), grad_np
 
 
         x0 = self.current_dist.to_flat()

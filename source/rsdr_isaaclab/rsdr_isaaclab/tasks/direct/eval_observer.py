@@ -71,7 +71,6 @@ class UniformEvalObserver(IsaacAlgoObserver):
             if hasattr(self.algo, "obs"):
                 self.algo.obs = obs
             self.algo.set_train()
-            
         for k, v in dict(getattr(factory_env, "extras", {})).items():
             if "eval" in k:
                 # print(f"Evalation: Logging {k}={v} from env infos.")

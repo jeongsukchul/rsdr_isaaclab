@@ -176,7 +176,7 @@ class BetasDist(Distr):
         self.ndim = len(self.dists)
 
     def rsample(self, sample_shape=torch.Size()):
-        sample_shape = torch.Size(sample_shape)
+        sample_shape = torch.Size(sample_shape, device=self.low.device) if isinstance(sample_shape, int) else torch.Size(sample_shape)
         n_samples = sample_shape[0] if len(sample_shape) > 0 else 1
         samples = torch.stack([d.rsample(sample_shape) for d in self.dists], dim=-1).type(torch.FloatTensor).to(device=self.low.device)
         
@@ -199,14 +199,22 @@ class BetasDist(Distr):
     def log_prob(self, value):
         # Transform value back to [0, 1] range
         value = value.to(device=self.low.device)
-        transformed_value = (value - self.low) / (self.high - self.low)
+        scale = (self.high - self.low).clamp_min(1e-12)
+        fixed = scale.abs() < 1e-12              # (D,) fixed dims mask
+        scale_safe = torch.where(fixed, torch.ones_like(scale), scale)
+
+        z = (value - self.low) / scale_safe           # (N, D)
+        transformed_value = (value - self.low) / scale
+        eps = 1e-6
+        transformed_value = transformed_value.clamp(eps, 1.0 - eps)
         log_probs = torch.stack([d.log_prob(v) for d, v in zip(self.dists, transformed_value.t())])
         return log_probs.sum(dim=0)
 
     def to_flat(self):
         """Convert distribution parameters to a flat array."""
         return torch.cat([self.alphas, self.betas])
-
+    def entropy(self):
+        return sum(d.entropy() for d in self.dists)
     @classmethod
     def from_flat(cls, flat_params, low, high):
         """Create a BetasDist instance from a flat array of parameters."""
@@ -275,8 +283,9 @@ class BoundarySamplingDist(Distr):
         in_range = torch.all((value >= self.low) & (value <= self.high), dim=-1)
         
         # Calculate the volume of the sampling space
-        volume = torch.prod(self.high - self.low)
-        
+        diff = self.current_high - self.current_low
+        diff_safe = torch.where(diff == 0, torch.ones_like(diff), diff)
+        volume =  diff_safe.prod()
         # Calculate the log probability for uniform sampling within the bounds
         log_prob_uniform = -torch.log(volume)
         

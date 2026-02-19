@@ -539,6 +539,13 @@ class FactoryEnv(DirectRLEnv):
         self._set_assets_to_default_pose(env_ids)
         self._set_franka_to_default_pose(joints=self.cfg.ctrl.reset_joints, env_ids=env_ids)
         self.step_sim_no_action()
+        ref_volume = self.sampler.volume(self.sampler.low, self.sampler.high)
+        self.extras[f"train/ref_entropy"] = 1/ref_volume * torch.log(torch.tensor(ref_volume)).item()
+        self.extras[f"train/ref_volume"]  = ref_volume
+        if self.sampler.name == "ADR":
+            self.extras[f"train/current_volume"]  = self.sampler.volume(self.sampler.current_low, self.sampler.current_high)
+        elif self.sampler.name == "DORAEMON":
+            self.extras[f"train/current_entropy"]  = self.sampler.entropy()
 
         dr_randomization.apply_learned_randomization(self, env_ids)
 
