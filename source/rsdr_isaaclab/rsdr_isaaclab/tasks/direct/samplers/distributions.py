@@ -32,8 +32,15 @@ class UniformDist(Distr):
         self.high = high
         self.device = device
         self.ndim = len(low)
+        diff = self.high - self.low
+        self.fixed = diff.abs() < 1e-12  # degenerate dims mask
+        self.free = ~self.fixed
         self.uniform = torch.distributions.Uniform(torch.tensor(low), torch.tensor(high))
-    
+        # IMPORTANT: Uniform is only over free dims
+        if self.free.any():
+            self.uniform = torch.distributions.Uniform(self.low[self.free], self.high[self.free])
+        else:
+            self.uniform = None
     def volume(self):
         """
         Calculate the volume of the hyper-rectangle defined by self.low and self.high.
@@ -41,10 +48,30 @@ class UniformDist(Distr):
         return torch.prod(torch.tensor(self.high) - torch.tensor(self.low))
     
     def rsample(self, sample_shape=torch.Size()):
-        return self.uniform.rsample(sample_shape)
-    
-    def log_prob(self, value):
-        return self.uniform.log_prob(value.to(self.device)).sum(-1)
+        shape = tuple(sample_shape) + (self.ndim,)
+        out = self.low.expand(shape).clone()
+        if self.uniform is not None:
+            out[..., self.free] = self.uniform.rsample(sample_shape)
+        return out
+    def entropy(self):
+        diff = (self.high - self.low).abs()
+        fixed = diff < 1e-12
+        diff_safe = torch.where(fixed, torch.ones_like(diff), diff)
+        return torch.log(diff_safe).masked_fill(fixed, 0.0).sum()
+
+    def log_prob(self, value, tol: float = 1e-6):
+        value = value.to(self.device)
+
+        if self.uniform is not None:
+            lp = self.uniform.log_prob(value[..., self.free]).sum(-1)
+        else:
+            lp = torch.zeros(value.shape[:-1], device=value.device, dtype=value.dtype)
+
+        if self.fixed.any():
+            ok = (value[..., self.fixed] - self.low[self.fixed]).abs().le(tol).all(dim=-1)
+            lp = torch.where(ok, lp, torch.full_like(lp, -torch.inf))
+
+        return lp
     
 class MultivariateNormalDist(Distr):
     def __init__(self, mean, cov, low, high):
@@ -170,8 +197,8 @@ class BetasDist(Distr):
         super().__init__(validate_args=False)
         self.alphas = alphas
         self.betas = betas
-        self.low = torch.tensor(low)
-        self.high = torch.tensor(high)
+        self.low = torch.as_tensor(low, device=self.alphas.device, dtype=self.alphas.dtype)
+        self.high = torch.as_tensor(high, device=self.alphas.device, dtype=self.alphas.dtype)
         self.dists = [torch.distributions.Beta(a, b) for a, b in zip(self.alphas, self.betas)]
         self.ndim = len(self.dists)
 
@@ -225,7 +252,14 @@ class BetasDist(Distr):
         """Convert distribution parameters to a flat array."""
         return torch.cat([self.alphas, self.betas])
     def entropy(self):
-        return sum(d.entropy() for d in self.dists)
+         # base beta entropy on [0,1]
+        base = torch.stack([d.entropy() for d in self.dists]).sum()
+        # add scaling term for non-degenerate dims
+        diff = (self.high - self.low).abs()
+        fixed = diff < 1e-12
+        diff_safe = torch.where(fixed, torch.ones_like(diff), diff)
+        jac = torch.log(diff_safe).masked_fill(fixed, 0.0).sum()
+        return base + jac
     @staticmethod
     def from_flat(x, low, high):
         # x must already be a torch tensor with grad
@@ -248,7 +282,8 @@ class BetasDist(Distr):
         """
         Compute KL divergence between this BetasDist and another BetasDist or UniformDist.
         """
-        kl_div = 0
+        kl_div = self.alphas.new_tensor(0.0)
+        eps = 1e-12
         for i in range(self.ndim):
             p_dist = torch.distributions.Beta(self.alphas[i], self.betas[i])
             len_p = (self.high[i] - self.low[i])

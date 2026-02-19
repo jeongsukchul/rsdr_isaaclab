@@ -341,12 +341,13 @@ class DORAEMON(LearnableSampler):
 
         def kl_constraint_fn_prime(x_opt):
             """Compute the derivative for the KL-divergence (used for scipy optimizer)."""
-            x_opt = torch.tensor(x_opt, requires_grad=True)
-            x = self._sigmoid(x_opt, self.min_bound, self.max_bound)
-            proposed_distr = BetasDist.from_flat(x, self.low, self.high)
-            kl_divergence = self.current_dist.kl_divergence(proposed_distr)
-            grads = torch.autograd.grad(kl_divergence, x_opt)
-            return np.concatenate([g.detach().cpu().numpy() for g in grads])
+            with torch.enable_grad():
+                x_opt = torch.tensor(x_opt, requires_grad=True)
+                x = self._sigmoid(x_opt, self.min_bound, self.max_bound)
+                proposed_distr = BetasDist.from_flat(x, self.low, self.high)
+                kl_divergence = self.current_dist.kl_divergence(proposed_distr)
+                grads = torch.autograd.grad(kl_divergence, x_opt)
+                return np.concatenate([g.detach().cpu().numpy() for g in grads])
 
         constraints.append(
             NonlinearConstraint(
@@ -360,18 +361,18 @@ class DORAEMON(LearnableSampler):
 
         def performance_constraint_fn(x_opt):
             """Compute the expected performance under the proposed distribution."""
-            print("x_opt mean/min/max:", x_opt.mean().item(), x_opt.min().item(), x_opt.max().item())
+            # print("x_opt mean/min/max:", x_opt.mean().item(), x_opt.min().item(), x_opt.max().item())
 
             x = self._sigmoid(x_opt, self.min_bound, self.max_bound)
-            print("x mean/min/max:", x.mean().item(), x.min().item(), x.max().item())
+            # print("x mean/min/max:", x.mean().item(), x.min().item(), x.max().item())
             proposed_distr = BetasDist.from_flat(x, self.low, self.high)
             
             log_prob_proposed = proposed_distr.log_prob(contexts)
             log_prob_current = self.current_dist.log_prob(contexts)
             
             importance_sampling = torch.exp(log_prob_proposed - log_prob_current)
-            print("log_prob_proposed mean/min/max:", log_prob_proposed.mean().item(), log_prob_proposed.min().item(), log_prob_proposed.max().item())
-            print("log_prob_current mean/min/max:", log_prob_current.mean().item(), log_prob_current.min().item(), log_prob_current.max().item())
+            # print("log_prob_proposed mean/min/max:", log_prob_proposed.mean().item(), log_prob_proposed.min().item(), log_prob_proposed.max().item())
+            # print("log_prob_current mean/min/max:", log_prob_current.mean().item(), log_prob_current.min().item(), log_prob_current.max().item())
             if torch.any(torch.isnan(importance_sampling)) or torch.any(torch.isinf(importance_sampling)):
                 print("Warning: NaN or Inf in importance sampling")
                 print("log_prob_proposed:", log_prob_proposed)
@@ -389,34 +390,35 @@ class DORAEMON(LearnableSampler):
 
         def performance_constraint_fn_prime(x_opt):
             """Compute the derivative for the performance-constraint (used for scipy optimizer)."""
-            x_opt = torch.tensor(x_opt, requires_grad=True)
-            x = self._sigmoid(x_opt, self.min_bound, self.max_bound)
-            proposed_distr = BetasDist.from_flat(x, self.low, self.high)
-            
-            log_prob_proposed = proposed_distr.log_prob(contexts)
-            log_prob_current = self.current_dist.log_prob(contexts)
-            
-            importance_sampling = torch.exp(log_prob_proposed - log_prob_current)
-            
-            if torch.any(torch.isnan(importance_sampling)) or torch.any(torch.isinf(importance_sampling)):
-                print("Warning: NaN or Inf in importance sampling (prime)")
-                importance_sampling = torch.nan_to_num(importance_sampling, nan=1.0, posinf=1.0, neginf=1.0)
-            
-            perf_values = torch.tensor(returns.detach() >= self.success_threshold, dtype=torch.float64)
-            performance = torch.mean(importance_sampling * perf_values)
-            
-            if torch.isnan(performance) or torch.isinf(performance):
-                print("Warning: NaN or Inf in performance (prime)")
-                return np.zeros_like(x_opt.detach().cpu().numpy())
-            
-            grads = torch.autograd.grad(performance, x_opt)
-            grad_np = np.concatenate([g.detach().cpu().numpy() for g in grads])
-            
-            if np.any(np.isnan(grad_np)) or np.any(np.isinf(grad_np)):
-                print("Warning: NaN or Inf in gradients")
-                grad_np = np.nan_to_num(grad_np, nan=0.0, posinf=0.0, neginf=0.0)
-            
-            return grad_np
+            with torch.enable_grad():
+                x_opt = torch.tensor(x_opt, requires_grad=True)
+                x = self._sigmoid(x_opt, self.min_bound, self.max_bound)
+                proposed_distr = BetasDist.from_flat(x, self.low, self.high)
+                
+                log_prob_proposed = proposed_distr.log_prob(contexts)
+                log_prob_current = self.current_dist.log_prob(contexts)
+                
+                importance_sampling = torch.exp(log_prob_proposed - log_prob_current)
+                
+                if torch.any(torch.isnan(importance_sampling)) or torch.any(torch.isinf(importance_sampling)):
+                    print("Warning: NaN or Inf in importance sampling (prime)")
+                    importance_sampling = torch.nan_to_num(importance_sampling, nan=1.0, posinf=1.0, neginf=1.0)
+                
+                perf_values = torch.tensor(returns.detach() >= self.success_threshold, dtype=torch.float64)
+                performance = torch.mean(importance_sampling * perf_values)
+                
+                if torch.isnan(performance) or torch.isinf(performance):
+                    print("Warning: NaN or Inf in performance (prime)")
+                    return np.zeros_like(x_opt.detach().cpu().numpy())
+
+                grads = torch.autograd.grad(performance, x_opt)
+                grad_np = np.concatenate([g.detach().cpu().numpy() for g in grads])
+                
+                if np.any(np.isnan(grad_np)) or np.any(np.isinf(grad_np)):
+                    print("Warning: NaN or Inf in gradients")
+                    grad_np = np.nan_to_num(grad_np, nan=0.0, posinf=0.0, neginf=0.0)
+                
+                return grad_np
 
         constraints.append(
             NonlinearConstraint(
@@ -433,23 +435,23 @@ class DORAEMON(LearnableSampler):
         def objective_fn(x_opt):
             """Minimize KL-divergence between the current and the target distribution,
                 s.t. previously defined constraints."""
-            x_opt = torch.tensor(x_opt, requires_grad=True, dtype=torch.float64)
-            x = self._sigmoid(x_opt, self.min_bound, self.max_bound)
-            proposed_distr = BetasDist.from_flat(x, self.low, self.high)
-            kl_divergence = proposed_distr.kl_divergence(self.target_dist)
-            
-            if not torch.isfinite(kl_divergence):
-                print(f"Warning: Non-finite KL divergence detected: {kl_divergence}")
-                return float('inf'), np.zeros_like(x_opt.detach().cpu().numpy())
-            
-            grads = torch.autograd.grad(kl_divergence, x_opt, create_graph=True)
-            grad_np = np.concatenate([g.detach().cpu().numpy() for g in grads])
-            
-            if not np.isfinite(grad_np).all():
-                print(f"Warning: Non-finite gradient detected: {grad_np}")
-                return float('inf'), np.zeros_like(x_opt.detach().cpu().numpy())
-            
-            return kl_divergence.detach().cpu().numpy(), grad_np
+            with torch.enable_grad():
+                x_opt = torch.tensor(x_opt, requires_grad=True, dtype=torch.float64)
+                x = self._sigmoid(x_opt, self.min_bound, self.max_bound)
+                proposed_distr = BetasDist.from_flat(x, self.low, self.high)
+                kl_divergence = proposed_distr.kl_divergence(self.target_dist)
+                
+                if not torch.isfinite(kl_divergence):
+                    print(f"Warning: Non-finite KL divergence detected: {kl_divergence}")
+                    return float('inf'), np.zeros_like(x_opt.detach().cpu().numpy())
+                
+                grads = torch.autograd.grad(kl_divergence, x_opt, create_graph=True)
+                grad_np = np.concatenate([g.detach().cpu().numpy() for g in grads])
+                
+                if not np.isfinite(grad_np).all():
+                    print(f"Warning: Non-finite gradient detected: {grad_np}")
+                    return float('inf'), np.zeros_like(x_opt.detach().cpu().numpy())
+                return kl_divergence.detach().cpu().numpy(), grad_np
 
 
         x0 = self.current_dist.to_flat()
@@ -537,20 +539,31 @@ class DORAEMON(LearnableSampler):
     
         print("DORAEMON current entropy", self.entropy())
         print("Reference distribution entropy", self.target_dist.entropy().sum().item())
-    def _sigmoid(self, x, lb=0, up=1):
-        x = torch.as_tensor(x, dtype=torch.float64, device=self.low.device)
-        lb = torch.as_tensor(lb, dtype=x.dtype, device=x.device)
-        up = torch.as_tensor(up, dtype=x.dtype, device=x.device)
-        return (up - lb) / (1 + torch.exp(-x)) + lb
+    def _sigmoid(self, x, lb=0.0, up=1.0):
+        # Preserve autograd if x is already a tensor
+        if torch.is_tensor(x):
+            xt = x
+        else:
+            xt = torch.as_tensor(x, dtype=torch.float64, device=self.low.device)
 
-    def _inv_sigmoid(self, x, lb=0, up=1):
-        x = torch.as_tensor(x, dtype=torch.float64, device=self.low.device)
-        lb = torch.as_tensor(lb, dtype=x.dtype, device=x.device)
-        up = torch.as_tensor(up, dtype=x.dtype, device=x.device)
-        # avoid log(0) if x hits bounds
+        lb = torch.as_tensor(lb, dtype=xt.dtype, device=xt.device)
+        up = torch.as_tensor(up, dtype=xt.dtype, device=xt.device)
+        return (up - lb) / (1 + torch.exp(-xt)) + lb
+
+
+    def _inv_sigmoid(self, x, lb=0.0, up=1.0):
+        if torch.is_tensor(x):
+            xt = x
+        else:
+            xt = torch.as_tensor(x, dtype=torch.float64, device=self.low.device)
+
+        lb = torch.as_tensor(lb, dtype=xt.dtype, device=xt.device)
+        up = torch.as_tensor(up, dtype=xt.dtype, device=xt.device)
+
         eps = 1e-12
-        x = x.clamp(lb + eps, up - eps)
-        return -torch.log((up - lb) / (x - lb) - 1)
+        xt = xt.clamp(lb + eps, up - eps)
+        return -torch.log((up - lb) / (xt - lb) - 1)
+
         
 class GOFLOW(LearnableSampler):
     def __init__(self,  cfg, device: str,

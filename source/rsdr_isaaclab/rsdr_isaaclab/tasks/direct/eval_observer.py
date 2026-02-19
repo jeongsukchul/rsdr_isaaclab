@@ -36,9 +36,10 @@ class UniformEvalObserver(IsaacAlgoObserver):
 
             prev_actions = torch.zeros((self.algo.num_actors, act_dim), device=self.algo.device)
             T = factory_env.max_episode_length
+            obs = self.algo.env_reset()
+
             for ep in range(self.eval_episodes):
-                obs = self.algo.env_reset()
-                for t in range(T):
+                for t in range(T-1):
                     # res = self.algo.get_action_values(obs)
                     # actions = res["actions"]
                     processed_obs = self.algo._preproc_obs(obs['obs'])
@@ -74,4 +75,4 @@ class UniformEvalObserver(IsaacAlgoObserver):
         for k, v in dict(getattr(factory_env, "extras", {})).items():
             if "eval" in k:
                 # print(f"Evalation: Logging {k}={v} from env infos.")
-                self.writer.add_scalar(f"{k}/frame", v, frame)
+                self.writer.add_scalar(f"{k}", v, frame)

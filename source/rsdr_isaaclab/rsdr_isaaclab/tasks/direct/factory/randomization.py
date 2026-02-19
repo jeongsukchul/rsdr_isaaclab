@@ -126,6 +126,7 @@ def apply_learned_randomization(env, env_ids=None):
     dist = env.sampler.get_test_dist() if env._uniform_eval else env.sampler.get_train_dist()
     # dist = env.sampler.get_train_dist()
     master_values = dist.sample((env.num_envs,)).detach()
+    master_values = master_values.to(device=env.dr_context.device, dtype=env.dr_context.dtype)
     # log_probs = sampler.log_prob(master_values).to(env.device).detach()
     master_values = master_values.to(env.device)
     env.dr_context[env_ids] = master_values
