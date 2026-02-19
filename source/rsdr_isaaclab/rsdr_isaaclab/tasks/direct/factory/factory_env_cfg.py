@@ -13,7 +13,7 @@ from isaaclab.sim import PhysxCfg, SimulationCfg
 from isaaclab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
 from isaaclab.utils import configclass
 from rsdr_isaaclab.tasks.direct.samplers.sampler import LearnableSampler
-from rsdr_isaaclab.tasks.direct.samplers.sampler import UDR, ADR, NoDR, DORAEMON
+from rsdr_isaaclab.tasks.direct.samplers.sampler import UDR, ADR, NoDR, DORAEMON, GOFLOW
 
 from .factory_tasks_cfg import ASSET_DIR, FactoryTask, GearMesh, NutThread, PegInsert
 from .randomization_cfg import FactoryRandomizationCfg
@@ -222,6 +222,14 @@ class FactoryTaskPegInsert_DORAEMON_Cfg(FactoryTaskPegInsertCfg):
         kl_upper_bound=0.1,
         init_beta_param=100.0,
         success_rate_condition=0.001,
+    )
+@configclass
+class FactoryTaskPegInsert_GOFLOW_Cfg(FactoryTaskPegInsertCfg):
+    sampler_class = GOFLOW
+    sampler_kwargs = dict(
+        num_training_iters=5,
+        alpha=1.,
+        beta=1.,
     )
 @configclass
 class FactoryTaskGearMeshCfg(FactoryEnvCfg):

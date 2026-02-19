@@ -49,6 +49,15 @@ gym.register(
     },
 )
 gym.register(
+    id="Custom-Factory-PegInsert-Direct-GOFLOW-v0",
+    entry_point=f"{__name__}.factory_env:FactoryEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.factory_env_cfg:FactoryTaskPegInsert_GOFLOW_Cfg",
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+    },
+)
+gym.register(
     id="Custom-Factory-GearMesh-Direct-v0",
     entry_point=f"{__name__}.factory_env:FactoryEnv",
     disable_env_checker=True,
