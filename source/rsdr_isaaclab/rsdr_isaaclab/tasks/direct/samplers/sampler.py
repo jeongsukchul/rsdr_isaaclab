@@ -169,8 +169,8 @@ class ADR(LearnableSampler):
         self.current_high.scatter_(0, dim_t, new_high)
 
         print(f"Current domain: Low = {self.current_low}, High = {self.current_high}")
-        print("Current domain volume:", np.prod((self.current_high - self.current_low).cpu().numpy()))
-        print("Reference domain volume:", np.prod((self.high - self.low).cpu().numpy()))
+        print("Current domain volume:", self.volume(self.current_low, self.current_high).item())
+        print("Reference domain volume:", self.volume(self.low, self.high).item())
 
 class DORAEMON(LearnableSampler):
     def __init__(self, cfg, device: str,
@@ -535,8 +535,8 @@ class DORAEMON(LearnableSampler):
             print(f"Optimization failed: {str(e)}")
             print("Keeping current distribution")
     
-        
-
+        print("DORAEMON current entropy", self.entropy())
+        print("Reference distribution entropy", self.target_dist.entropy().sum().item())
     def _sigmoid(self, x, lb=0, up=1):
         """sigmoid of x"""
         x = x if torch.is_tensor(x) else torch.tensor(x)
