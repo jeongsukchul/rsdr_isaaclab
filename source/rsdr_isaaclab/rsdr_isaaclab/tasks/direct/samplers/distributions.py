@@ -197,31 +197,52 @@ class BetasDist(Distr):
         return output
     
     def log_prob(self, value):
-        # Transform value back to [0, 1] range
-        value = value.to(device=self.low.device)
-        scale = (self.high - self.low).clamp_min(1e-12)
-        fixed = scale.abs() < 1e-12              # (D,) fixed dims mask
+        # value: (N, D)
+        value = value.to(device=self.low.device, dtype=self.low.dtype)
+
+        scale = (self.high - self.low)
+        fixed = scale.abs() < 1e-12                          # (D,)
         scale_safe = torch.where(fixed, torch.ones_like(scale), scale)
 
-        z = (value - self.low) / scale_safe           # (N, D)
-        transformed_value = (value - self.low) / scale
+        # normalize to (0,1)
         eps = 1e-6
+        transformed_value = (value - self.low) / scale_safe  # (N, D)
         transformed_value = transformed_value.clamp(eps, 1.0 - eps)
-        log_probs = torch.stack([d.log_prob(v) for d, v in zip(self.dists, transformed_value.t())])
-        return log_probs.sum(dim=0)
+
+        # per-dim logprob, but ignore fixed dims
+        log_probs_per_dim = []
+        for i, d in enumerate(self.dists):
+            v = transformed_value[:, i]
+            lp = d.log_prob(v)                               # (N,)
+            if fixed[i]:
+                lp = torch.zeros_like(lp)                    # deterministic dim => no contribution
+            log_probs_per_dim.append(lp)
+
+        log_probs = torch.stack(log_probs_per_dim, dim=0)    # (D, N)
+        return log_probs.sum(dim=0)     
 
     def to_flat(self):
         """Convert distribution parameters to a flat array."""
         return torch.cat([self.alphas, self.betas])
     def entropy(self):
         return sum(d.entropy() for d in self.dists)
-    @classmethod
-    def from_flat(cls, flat_params, low, high):
-        """Create a BetasDist instance from a flat array of parameters."""
-        ndim = len(low)
-        alphas = flat_params[:ndim]
-        betas = flat_params[ndim:]
-        return cls(alphas, betas, low, high)
+    @staticmethod
+    def from_flat(x, low, high):
+        # x must already be a torch tensor with grad
+        assert torch.is_tensor(x)
+
+        # DO NOT do torch.tensor(x) or x.detach()
+        # low/high can be tensors already; just ensure device/dtype match x
+        low = low.to(device=x.device, dtype=x.dtype)
+        high = high.to(device=x.device, dtype=x.dtype)
+
+        # if x is (2D,) or similar, slice WITHOUT breaking graph
+        # example if x packs alpha/beta:
+        D = low.numel()
+        alpha = x[:D]
+        beta  = x[D:2*D]
+
+        return BetasDist(alpha, beta, low, high)
 
     def kl_divergence(self, other):
         """
@@ -230,22 +251,36 @@ class BetasDist(Distr):
         kl_div = 0
         for i in range(self.ndim):
             p_dist = torch.distributions.Beta(self.alphas[i], self.betas[i])
-            
+            len_p = (self.high[i] - self.low[i])
+            len_p_abs = len_p.abs()
+
+            if isinstance(other, UniformDist):
+                len_q = (other.high[i] - other.low[i])
+                len_q_abs = len_q.abs()
+            elif isinstance(other, BetasDist):
+                len_q = (other.high[i] - other.low[i])
+                len_q_abs = len_q.abs()
+            else:
+                raise ValueError(f"Unsupported distribution type: {type(other)}")
+
+            # If either side is degenerate, treat as deterministic => skip
+            if (len_p_abs < eps) or (len_q_abs < eps):
+                continue
             if isinstance(other, UniformDist):
                 # Scale down the uniform distribution to [0, 1]
                 q_dist = torch.distributions.Uniform(0, 1)
                 # Compute KL divergence
-                kl_div += torch.distributions.kl_divergence(p_dist, q_dist)
+                kl_i = torch.distributions.kl_divergence(p_dist, q_dist)
                 # Adjust for the change in scale
-                kl_div -= torch.log(self.high[i] - self.low[i])
+                kl_i = kl_i - torch.log(len_p_abs)
             elif isinstance(other, BetasDist):
                 q_dist = torch.distributions.Beta(other.alphas[i], other.betas[i])
-                kl_div += torch.distributions.kl_divergence(p_dist, q_dist)
+                kl_i = torch.distributions.kl_divergence(p_dist, q_dist)
                 # Adjust for different bounds if necessary
-                if not torch.allclose(self.low[i], other.low[i]) or not torch.allclose(self.high[i], other.high[i]):
-                    kl_div += torch.log((other.high[i] - other.low[i]) / (self.high[i] - self.low[i]))
+                kl_i = kl_i + torch.log(len_q_abs / len_p_abs)
             else:
                 raise ValueError(f"Unsupported distribution type: {type(other)}")
+            kl_div += kl_i
         return kl_div
 
 class BoundarySamplingDist(Distr):

@@ -538,18 +538,20 @@ class DORAEMON(LearnableSampler):
         print("DORAEMON current entropy", self.entropy())
         print("Reference distribution entropy", self.target_dist.entropy().sum().item())
     def _sigmoid(self, x, lb=0, up=1):
-        """sigmoid of x"""
-        x = x if torch.is_tensor(x) else torch.tensor(x)
-        sig = (up-lb)/(1+torch.exp(-x)) + lb
-        return sig
+        x = torch.as_tensor(x, dtype=torch.float64, device=self.low.device)
+        lb = torch.as_tensor(lb, dtype=x.dtype, device=x.device)
+        up = torch.as_tensor(up, dtype=x.dtype, device=x.device)
+        return (up - lb) / (1 + torch.exp(-x)) + lb
 
     def _inv_sigmoid(self, x, lb=0, up=1):
-        """return sigmoid^-1(x)"""
-        x = x if torch.is_tensor(x) else torch.tensor(x)
-        assert torch.all(x <= up) and torch.all(x >= lb)
-        inv_sig = -torch.log((up-lb)/(x-lb) - 1)
-        return inv_sig
-    
+        x = torch.as_tensor(x, dtype=torch.float64, device=self.low.device)
+        lb = torch.as_tensor(lb, dtype=x.dtype, device=x.device)
+        up = torch.as_tensor(up, dtype=x.dtype, device=x.device)
+        # avoid log(0) if x hits bounds
+        eps = 1e-12
+        x = x.clamp(lb + eps, up - eps)
+        return -torch.log((up - lb) / (x - lb) - 1)
+        
 class GOFLOW(LearnableSampler):
     def __init__(self,  cfg, device: str,
                  num_training_iters=None, alpha=None, beta=None, max_loss=1e6, **kwargs):
