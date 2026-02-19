@@ -25,7 +25,7 @@ def get_deriv_gains(prop_gains, rot_deriv_scale=1.0):
 
 def wrap_yaw(angle):
     """Ensure yaw stays within range."""
-    return torch.where(angle > np.deg2rad(235), angle - 2 * np.pi, angle)
+    return torch.where(angle > np.deg2rad(235), angle - 2 * torch.pi, angle)
 
 
 def set_friction(asset, value, num_envs):

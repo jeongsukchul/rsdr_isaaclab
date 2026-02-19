@@ -3,6 +3,7 @@
 #
 # SPDX-License-Identifier: BSD-3-Clause
 
+from typing import Type
 import isaaclab.sim as sim_utils
 from isaaclab.actuators import ImplicitActuatorCfg
 from isaaclab.assets import ArticulationCfg
@@ -11,6 +12,8 @@ from isaaclab.scene import InteractiveSceneCfg
 from isaaclab.sim import PhysxCfg, SimulationCfg
 from isaaclab.sim.spawners.materials.physics_materials_cfg import RigidBodyMaterialCfg
 from isaaclab.utils import configclass
+from rsdr_isaaclab.tasks.direct.samplers.sampler import LearnableSampler
+from rsdr_isaaclab.tasks.direct.samplers.sampler import UDR, ADR, NoDR, DORAEMON
 
 from .factory_tasks_cfg import ASSET_DIR, FactoryTask, GearMesh, NutThread, PegInsert
 from .randomization_cfg import FactoryRandomizationCfg
@@ -188,24 +191,91 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         },
     )
     randomization = FactoryRandomizationCfg()
-
+    sampler_class: Type[LearnableSampler] = LearnableSampler 
 
 @configclass
 class FactoryTaskPegInsertCfg(FactoryEnvCfg):
     task_name = "peg_insert"
     task = PegInsert()
     episode_length_s = 10.0
+    randomization = FactoryRandomizationCfg(task_class=PegInsert)
+    sampler_class = UDR
 
+@configclass
+class FactoryTaskPegInsert_NoDR_Cfg(FactoryTaskPegInsertCfg):
+    sampler_class = NoDR
 
+@configclass
+class FactoryTaskPegInsert_ADR_Cfg(FactoryTaskPegInsertCfg):
+    sampler_class = ADR
+    sampler_kwargs = dict(
+        boundary_prob=0.5,
+        success_threshold=0.8,
+    )
+@configclass
+class FactoryTaskPegInsert_DORAEMON_Cfg(FactoryTaskPegInsertCfg):
+    sampler_class = DORAEMON
+    sampler_kwargs = dict(
+        success_threshold=0.5,
+        kl_upper_bound=0.1,
+        init_beta_param=100.0,
+        success_rate_condition=0.5,
+    )
 @configclass
 class FactoryTaskGearMeshCfg(FactoryEnvCfg):
     task_name = "gear_mesh"
     task = GearMesh()
     episode_length_s = 20.0
+    randomization = FactoryRandomizationCfg(task_class=GearMesh)
 
+
+@configclass
+class FactoryTaskGearMesh_ADR_Cfg(FactoryTaskGearMeshCfg):
+    sampler_class = ADR
+    sampler_kwargs = dict(
+        boundary_prob=0.5,
+        success_threshold=0.6,
+    )
+@configclass
+class FactoryTaskGearMesh_NoDR_Cfg(FactoryTaskGearMeshCfg):
+    sampler_class = NoDR
+
+@configclass
+class FactoryTaskGearMesh_DORAEMON_Cfg(FactoryTaskGearMeshCfg):
+    sampler_class = DORAEMON
+    sampler_kwargs = dict(
+        success_threshold=0.5,
+        kl_upper_bound=0.1,
+        init_beta_param=100.0,
+        success_rate_condition=0.5,
+    )
 
 @configclass
 class FactoryTaskNutThreadCfg(FactoryEnvCfg):
     task_name = "nut_thread"
     task = NutThread()
     episode_length_s = 30.0
+    randomization = FactoryRandomizationCfg(task_class=NutThread)
+
+@configclass
+class FactoryTaskNutThread_NoDR_Cfg(FactoryTaskNutThreadCfg):
+    sampler_class = NoDR
+
+@configclass
+class FactoryTaskNutThread_ADR_Cfg(FactoryTaskNutThreadCfg):
+    sampler_class = ADR
+    sampler_kwargs = dict(
+        boundary_prob=0.5,
+        success_threshold=0.8,
+    )
+
+
+@configclass
+class FactoryTaskNutThread_DORAEMON_Cfg(FactoryTaskNutThreadCfg):
+    sampler_class = DORAEMON
+    sampler_kwargs = dict(
+        success_threshold=0.8,
+        kl_upper_bound=0.1,
+        init_beta_param=100.0,
+        success_rate_condition=0.6,
+    )

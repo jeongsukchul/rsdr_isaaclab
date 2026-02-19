@@ -178,7 +178,7 @@ class BetasDist(Distr):
     def rsample(self, sample_shape=torch.Size()):
         sample_shape = torch.Size(sample_shape)
         n_samples = sample_shape[0] if len(sample_shape) > 0 else 1
-        samples = torch.stack([d.rsample(sample_shape) for d in self.dists], dim=-1).type(torch.FloatTensor)
+        samples = torch.stack([d.rsample(sample_shape) for d in self.dists], dim=-1).type(torch.FloatTensor).to(device=self.low.device)
         
         # Transform samples to the desired range
         output = self.low + (self.high - self.low) * samples
@@ -198,6 +198,7 @@ class BetasDist(Distr):
     
     def log_prob(self, value):
         # Transform value back to [0, 1] range
+        value = value.to(device=self.low.device)
         transformed_value = (value - self.low) / (self.high - self.low)
         log_probs = torch.stack([d.log_prob(v) for d, v in zip(self.dists, transformed_value.t())])
         return log_probs.sum(dim=0)
@@ -252,9 +253,8 @@ class BoundarySamplingDist(Distr):
         
         # Decide which samples will be on the boundary
         boundary_mask = torch.rand(n_samples) < self.boundary_prob
-        
         # For non-boundary samples, sample uniformly
-        non_boundary_samples = torch.rand((n_samples, self.ndim)) * (self.high - self.low) + self.low
+        non_boundary_samples = torch.rand((n_samples, self.ndim), device=self.low.device) * (self.high - self.low) + self.low
         
         # For boundary samples, choose a random dimension and boundary
         boundary_dims = torch.randint(0, self.ndim, (n_samples,))

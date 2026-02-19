@@ -76,7 +76,7 @@ class FactoryRandomizationCfg:
                 RandomizationParamCfg(
                     name="fixed_yaw_noise", size=1, sampler_type="uniform",
                     hard_bounds=(
-                        [-float(np.deg2rad(task_cfg.fixed_asset_init_orn_range_deg))], 
+                        [0], 
                         [float(np.deg2rad(task_cfg.fixed_asset_init_orn_range_deg))]
                     ),
                     init_params=(

@@ -36,10 +36,14 @@ class FactoryEnv(DirectRLEnv):
         super().__init__(cfg, render_mode, **kwargs)
 
         factory_utils.set_body_inertias(self._robot, self.scene.num_envs)
+        self.sampler = cfg.sampler_class(cfg.randomization, self.device, **getattr(cfg, "sampler_kwargs", {}))
         self._init_tensors()
         self._set_default_dynamics_parameters()
-        self.sampler = LearnableSampler(cfg.randomization, self.device)
-
+        self._uniform_eval = False
+        self._first_reset = True
+        print("max episode length:", self.max_episode_length)
+    def set_uniform_eval(self, enabled: bool):
+        self._uniform_eval = bool(enabled)
     def _set_default_dynamics_parameters(self):
         """Set parameters defining dynamic interactions."""
         self.default_gains = torch.tensor(self.cfg.ctrl.default_task_prop_gains, device=self.device).repeat(
@@ -84,7 +88,8 @@ class FactoryEnv(DirectRLEnv):
 
         self.ep_succeeded = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
         self.ep_success_times = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
-
+        self.ep_return = torch.zeros((self.num_envs,), dtype=torch.float32, device=self.device)
+        self.dr_context = torch.zeros((self.num_envs, self.sampler.num_params), dtype=torch.float32, device=self.device)
     def _setup_scene(self):
         """Initialize simulation scene."""
         spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg(), translation=(0.0, 0.0, -1.05))
@@ -420,6 +425,8 @@ class FactoryEnv(DirectRLEnv):
 
         self.prev_actions = self.actions.clone()
         self._log_factory_metrics(rew_dict, curr_successes)
+        t = self.episode_length_buf.to(torch.float32) 
+        self.ep_return += rew_buf
         return rew_buf
 
     def _get_factory_rew_dict(self, curr_successes):
@@ -487,8 +494,48 @@ class FactoryEnv(DirectRLEnv):
 
     def _reset_idx(self, env_ids):
         """We assume all envs will always be reset at the same time."""
+        print("RESET IDX called, uniform_eval=", self._uniform_eval,
+          "num_env_ids=", 0 if env_ids is None else len(env_ids))
         super()._reset_idx(env_ids)
-
+        if not self._first_reset:
+            check_rot = self.cfg_task.name == "nut_thread"
+            curr_successes = self._get_curr_successes(
+                success_threshold=self.cfg_task.success_threshold, check_rot=check_rot
+            )
+            success_rate = torch.count_nonzero(curr_successes) / self.num_envs
+            if not self._uniform_eval:
+                contexts = self.extras["dr_samples"].detach()
+                returns  = self.ep_return.detach()
+                scaled_returns = returns / self.max_episode_length * self.cfg.task.reward_scale
+                if self.sampler.name == 'DORAEMON' or self.sampler.name == 'ADR':
+                    self.sampler.update(contexts, curr_successes)
+                else:
+                    self.sampler.update(contexts, scaled_returns)
+            if env_ids is not None and len(env_ids) > 0 :
+                ep_ret = self.ep_return[env_ids]
+                prefix = "eval" if self._uniform_eval else "train"
+                ds = self.extras["dr_samples"]
+                
+                self.extras[f"{prefix}/dr_samples_mean"] = ds.mean()
+                self.extras[f"{prefix}/dr_samples_std"]  = ds.std(unbiased=False)
+                self.extras[f"{prefix}/successes"] = success_rate   
+                self.extras[f"{prefix}/episode_return"]      = ep_ret.mean()
+                self.extras[f"{prefix}/episode_return_min"]  = ep_ret.min()
+                self.extras[f"{prefix}/episode_return_max"]  = ep_ret.max()
+                self.extras[f"{prefix}/episode_return_p75"]  = torch.quantile(ep_ret, 0.75)
+                self.extras[f"{prefix}/episode_return_p50"]  = torch.quantile(ep_ret, 0.50)
+                self.extras[f"{prefix}/episode_return_p25"]  = torch.quantile(ep_ret, 0.25)
+                self.extras[f"{prefix}/episode_return_p20"]  = torch.quantile(ep_ret, 0.20)
+                self.extras[f"{prefix}/episode_return_p10"]  = torch.quantile(ep_ret, 0.10)
+                self.extras[f"{prefix}/episode_return_p05"]  = torch.quantile(ep_ret, 0.05)
+                self.extras[f"{prefix}/episode_return_cvar20"] = ep_ret[ep_ret <= torch.quantile(ep_ret, 0.20)].mean()
+                self.extras[f"{prefix}/episode_return_cvar10"] = ep_ret[ep_ret <= torch.quantile(ep_ret, 0.10)].mean()
+                self.extras[f"{prefix}/episode_return_std"]  = ep_ret.std(unbiased=False)
+                self.extras[f"{prefix}/norm_ep_return"]      = ep_ret.mean() / self.max_episode_length
+                # CRITICAL: reset accumulator even in eval
+                self.ep_return[env_ids] = 0.0
+        self._first_reset = False
+            
         self._set_assets_to_default_pose(env_ids)
         self._set_franka_to_default_pose(joints=self.cfg.ctrl.reset_joints, env_ids=env_ids)
         self.step_sim_no_action()
@@ -576,7 +623,7 @@ class FactoryEnv(DirectRLEnv):
         if self.cfg_task.name == "nut_thread":
             # Rotate along z-axis of frame for default position.
             initial_rot_deg = self.cfg_task.held_asset_rot_init
-            rot_yaw_euler = torch.tensor([0.0, 0.0, initial_rot_deg * np.pi / 180.0], device=self.device).repeat(
+            rot_yaw_euler = torch.tensor([0.0, 0.0, initial_rot_deg * torch.pi / 180.0], device=self.device).repeat(
                 self.num_envs, 1
             )
             held_asset_relative_quat = torch_utils.quat_from_euler_xyz(
@@ -612,7 +659,7 @@ class FactoryEnv(DirectRLEnv):
         self.scene.update(dt=self.physics_dt)
         self._compute_intermediate_values(dt=self.physics_dt)
 
-    def randomize_initial_state(self, env_ids, master_values: torch.Tensor | None = None, gravity_z: float | None = None):
+    def randomize_initial_state(self, env_ids, master_values: torch.Tensor | None = None, gravity_z: float | None = None, dist = None):
 
         """Randomize initial state and perform any episode-level randomization."""
         # Disable gravity.
@@ -719,15 +766,16 @@ class FactoryEnv(DirectRLEnv):
             else:
                 # learned sampler; resample ONLY for bad_envs each attempt (like your manager-based logic)
                 if ik_attempt > 0:
-                    new_vals = self.sampler.sample(n_bad)
+                    
+                    new_vals = dist.sample((n_bad,))
                     # overwrite ONLY the noise fields in master_values for these envs
                     for p in self.sampler.cfg.params:
                         if p.name in ("hand_init_pos_noise", "hand_init_orn_noise"):
                             master_values[bad_envs][:, p.indices] = new_vals[:, p.indices]
                     # keep extras consistent
                     self.extras["dr_samples"][bad_envs] = master_values[bad_envs]
+                    self.dr_context[bad_envs] = master_values[bad_envs]
                     self.extras["dr_log_probs"][bad_envs] = self.sampler.log_prob(master_values[bad_envs])
-
                 noise_hand_pos = dr_randomization._extract_param(self.sampler, master_values, "hand_init_pos_noise", self.device, default_dim=3)
                 noise_hand_orn = dr_randomization._extract_param(self.sampler, master_values, "hand_init_orn_noise", self.device, default_dim=3)
 

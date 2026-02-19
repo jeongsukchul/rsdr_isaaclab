@@ -30,7 +30,7 @@ parser.add_argument(
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint.")
 parser.add_argument("--sigma", type=str, default=None, help="The policy's initial standard deviation.")
 parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
-parser.add_argument("--wandb-project-name", type=str, default="forge", help="the wandb's project name")
+parser.add_argument("--wandb-project-name", type=str, default="factory", help="the wandb's project name")
 parser.add_argument("--wandb-entity", type=str, default="tjrcjf410-seoul-national-university", help="the entity (team) of wandb's project")
 parser.add_argument("--wandb-name", type=str, default=None, help="the name of wandb's run")
 parser.add_argument(
@@ -217,12 +217,37 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     agent_cfg["params"]["config"]["num_actors"] = env.unwrapped.num_envs
     # create runner from rl-games
 
-    if "pbt" in agent_cfg and agent_cfg["pbt"]["enabled"]:
-        observers = MultiObserver([IsaacAlgoObserver(), PbtAlgoObserver(agent_cfg, args_cli)])
-        runner = Runner(observers)
-    else:
-        runner = Runner(IsaacAlgoObserver())
+    # if "pbt" in agent_cfg and agent_cfg["pbt"]["enabled"]:
+    #     observers = MultiObserver([IsaacAlgoObserver(), PbtAlgoObserver(agent_cfg, args_cli)])
+    #     runner = Runner(observers)
+    # else:
+    #     runner = Runner(IsaacAlgoObserver())
+    # import copy
+    from rsdr_isaaclab.tasks.direct.eval_observer import UniformEvalObserver
+    # task = args_cli.task.split("-") 
+    # print("task : ", task)
+    # if len(task) >5:
+    #     eval_task = task[0] + "-" + task[1] + "-" + task[2] + "-" + task[3] + "-" + task[-1]
+    # print("eval_task: ", eval_task)
+    # eval_env_cfg = copy.deepcopy(env_cfg)
+    # eval_env_cfg.scene.num_envs = 1024  # smaller eval to reduce overhead (optional)
+    
+    # observer = UniformEvalObserver(
+    #     eval_task_id=eval_task,  # uniform DR env id
+    #     eval_env_cfg=eval_env_cfg,
+    #     rl_device=rl_device,
+    #     eval_every=1,
+    #     eval_episodes=10,
+    #     deterministic=True,
+    # )
 
+    # runner = Runner(observer)
+    observers = MultiObserver([
+        IsaacAlgoObserver(),
+        UniformEvalObserver(eval_every=5, eval_episodes=1, deterministic=True),
+    ])
+
+    runner = Runner(observers)
     runner.load(agent_cfg)
 
     # reset the agent and env

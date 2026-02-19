@@ -11,7 +11,7 @@ class LearnableSampler(nn.Module):
         self.cfg = cfg
         self.device = device
         self.num_params = cfg.total_params  # Total scalar parameters
-        
+        self.name="default"
         init = []        
         low = []
         high = []
@@ -31,13 +31,14 @@ class LearnableSampler(nn.Module):
             low.extend(p_low)
             high.extend(p_high)
 
-        
         # Fixed Constants
         self.init = torch.tensor(init, device=device, dtype=torch.float32)
         self.low = torch.tensor(low, device=device, dtype=torch.float32)
         self.high = torch.tensor(high, device=device, dtype=torch.float32)
-        self.current_dist = UniformDist(self.low, self.high, self.device)
         self.mid = (self.low + self.high) / 2.0
+        self.current_dist = UniformDist(self.low, self.high, self.device)
+        print("Reference sampler with low:", self.low
+              , "high:", self.high, "init:", self.init)
     def sample(self, num_samples: int) -> torch.Tensor:
         return self.current_dist.rsample((num_samples,))
 
@@ -49,7 +50,7 @@ class LearnableSampler(nn.Module):
         pass
     
     def get_train_dist(self):
-        raise NotImplementedError
+        return UniformDist(self.low, self.high, self.device)
     
     def get_test_dist(self):
         return UniformDist(self.low, self.high, self.device)
@@ -57,17 +58,25 @@ class LearnableSampler(nn.Module):
 class NoDR(LearnableSampler):
     def __init__(self, cfg, device: str, **kwargs):
         super().__init__(cfg, device)
-        self.current_dist = UniformDist(self.init, self.init, self.device)
+        self.name = "NoDR"
 
     def get_train_dist(self):
-        return self.current_dist
+        return UniformDist(self.init, self.init, self.device)
+class UDR(LearnableSampler):
+    def __init__(self, cfg, device: str, **kwargs):
+        super().__init__(cfg, device)
+        self.name = "UDR"
+    def get_train_dist(self):
+        return UniformDist(self.low, self.high, self.device)
 class ADR(LearnableSampler):
     def __init__(self, cfg, device: str,
-                 boundary_prob=0.5, 
-                 success_threshold=0.5, 
+                 boundary_prob=0.8, 
+                 success_threshold=0.8, 
                  expansion_factor=1.1, 
+                 initial_dr_percentage=0.2,
                 **kwargs):
         super().__init__(cfg, device)
+        self.name = "ADR"
         self.ndim = len(self.low)
         self.lower_threshold = success_threshold/2.0
         self.upper_threshold = success_threshold
@@ -76,65 +85,87 @@ class ADR(LearnableSampler):
         
         mid_range = (torch.tensor(self.low) + torch.tensor(self.high)) / 2
         # interval = (torch.tensor(domain_range.high) - torch.tensor(domain_range.low)) * initial_dr_percentage
-        self.current_low = (mid_range).tolist()
-        self.current_high = (mid_range).tolist()
+        span = self.high - self.low
+        half_width = 0.5 * span * initial_dr_percentage
+        self.current_low = mid_range - half_width
+        self.current_high = mid_range + half_width
+        # self.current_dist = BoundarySamplingDist(self.current_low, self.current_high, self.boundary_prob)
 
-    @property
-    def current_dist(self):
-        return self.get_train_dist()
     def sample(self, num_samples: int) -> torch.Tensor:
         return self.get_train_dist().rsample((num_samples,))
     def log_prob(self, value: torch.Tensor) -> torch.Tensor:
         return self.get_train_dist().log_prob(value)
+    
     def get_train_dist(self):
         return BoundarySamplingDist(self.current_low, self.current_high, self.boundary_prob)
 
     def update(self, contexts, returns):
-        contexts = contexts.numpy()
-        returns = returns.numpy()
-        
-        print(contexts)
-        # Randomly select a dimension to update
-        dim = np.random.randint(0, self.ndim)
-        
-        low_boundary = self.current_low[dim]
-        high_boundary = self.current_high[dim]
-        
-        # Identify samples near each boundary
-        low_mask = np.isclose(contexts[:, dim], low_boundary, atol=1e-3)
-        high_mask = np.isclose(contexts[:, dim], high_boundary, atol=1e-3)
-        
-        # Compute success rates for each boundary
-        low_success_rate = np.mean(returns[low_mask]) if np.any(low_mask) else 0
-        high_success_rate = np.mean(returns[high_mask]) if np.any(high_mask) else 0
-        print("Low boundary reward: "+str(low_success_rate))
-        print("High boundary reward: "+str(low_success_rate))
+        returns = returns.view(-1).to(device=self.device)
+        if not torch.is_floating_point(returns):
+            returns = returns.float()
+         # Randomly select a dimension to update
+        dim_t = torch.randint(0, self.ndim, (1,), device=self.device, dtype=torch.long)  # shape (1,)
 
-        # Update boundaries based on success rates
-        if low_success_rate > self.upper_threshold:
-            midpoint = (low_boundary + high_boundary) / 2
-            new_low = max(midpoint - (midpoint - low_boundary) / self.expansion_factor, self.low[dim])
-            self.current_low[dim] = new_low
-            print(f"ADR Update - Dimension {dim}, Lower boundary expanded to: {new_low:.4f}")
-        elif low_success_rate < self.lower_threshold:
-            midpoint = (low_boundary + high_boundary) / 2
-            new_low = min(midpoint - (midpoint - low_boundary) * self.expansion_factor, (low_boundary + high_boundary) / 2)
-            self.current_low[dim] = new_low
-            print(f"ADR Update - Dimension {dim}, Lower boundary contracted to: {new_low:.4f}")
-        
-        if high_success_rate > self.upper_threshold:
-            midpoint = (low_boundary + high_boundary) / 2
-            new_high = min(midpoint + (high_boundary - midpoint) / self.expansion_factor, self.high[dim])
-            self.current_high[dim] = new_high
-            print(f"ADR Update - Dimension {dim}, Upper boundary expanded to: {new_high:.4f}")
-        elif high_success_rate < self.lower_threshold:
-            midpoint = (low_boundary + high_boundary) / 2
-            new_high = max(midpoint + (high_boundary - midpoint) * self.expansion_factor, (low_boundary + high_boundary) / 2)
-            self.current_high[dim] = new_high
-            print(f"ADR Update - Dimension {dim}, Upper boundary contracted to: {new_high:.4f}")
+        # gather the chosen dim column without python int
+        ctx_dim = contexts.index_select(1, dim_t).squeeze(1)  # (N,)
+
+        low_b  = self.current_low.index_select(0, dim_t)   # (1,)
+        high_b = self.current_high.index_select(0, dim_t)  # (1,)
+
+        atol = torch.tensor(1e-3, device=self.device, dtype=torch.float32)
+        rtol = torch.tensor(0.0,  device=self.device, dtype=torch.float32)
+
+        low_mask  = torch.isclose(ctx_dim, low_b,  atol=atol, rtol=rtol)   # (N,)
+        high_mask = torch.isclose(ctx_dim, high_b, atol=atol, rtol=rtol)   # (N,)
+
+        # masked mean without branching / sync:
+        def masked_mean_sumcount(x, mask):
+            m = mask.to(x.dtype)
+            count = m.sum()                       # scalar tensor
+            s = (x * m).sum()                     # scalar tensor
+            mean = s / torch.clamp(count, min=1)  # safe
+            mean = mean * (count > 0).to(x.dtype) # zero if empty
+            return mean
+
+        low_success_rate  = masked_mean_sumcount(returns, low_mask)   # scalar tensor
+        high_success_rate = masked_mean_sumcount(returns, high_mask)  # scalar tensor
+        print("Low boundary reward: "+str(low_success_rate))
+        print("High boundary reward: "+str(high_success_rate))
+        midpoint = 0.5 * (low_b + high_b)  # (1,)
+        ef = torch.tensor(float(self.expansion_factor), device=self.device, dtype=torch.float32)
+
+        upper = torch.tensor(float(self.upper_threshold), device=self.device, dtype=torch.float32)
+        lower = torch.tensor(float(self.lower_threshold), device=self.device, dtype=torch.float32)
+
+        # ---- update low ----
+        low_expand   = low_success_rate  > upper
+        low_contract = low_success_rate  < lower
+
+        low_floor = self.low.index_select(0, dim_t)  # (1,)
+
+        new_low_expand   = torch.maximum(midpoint - (midpoint - low_b) * ef, low_floor)
+        new_low_contract = torch.minimum(midpoint - (midpoint - low_b) / ef, midpoint)
+
+        new_low = torch.where(low_expand, new_low_expand,
+                torch.where(low_contract, new_low_contract, low_b))
+
+        self.current_low.scatter_(0, dim_t, new_low)
+
+        # ---- update high ----
+        high_expand   = high_success_rate > upper
+        high_contract = high_success_rate < lower
+
+        high_ceil = self.high.index_select(0, dim_t)  # (1,)
+
+        new_high_expand   = torch.minimum(midpoint + (high_b - midpoint) * ef, high_ceil)
+        new_high_contract = torch.maximum(midpoint + (high_b - midpoint) / ef, midpoint)
+
+        new_high = torch.where(high_expand, new_high_expand,
+                torch.where(high_contract, new_high_contract, high_b))
+
+        self.current_high.scatter_(0, dim_t, new_high)
 
         print(f"Current domain: Low = {self.current_low}, High = {self.current_high}")
-
 
 
 class DORAEMON(LearnableSampler):
@@ -147,6 +178,7 @@ class DORAEMON(LearnableSampler):
                  train_until_performance_lb: bool = True,
                  **kwargs):
         super().__init__(cfg, device)
+        self.name = "DORAEMON"
         self.success_threshold = success_threshold
         self.success_rate_condition = success_rate_condition
         self.kl_upper_bound = kl_upper_bound
@@ -514,6 +546,7 @@ class GOFLOW(LearnableSampler):
     def __init__(self,  cfg, device: str,
                  num_training_iters=None, alpha=None, beta=None, max_loss=1e6, **kwargs):
         super().__init__(cfg, device)
+        self.name = "GOFLOW"
         self.alpha = alpha  # Weight for entropy maximization (KL to target)
         self.beta = beta    # Weight for similarity constraint (KL to previous)
         self.current_dist = NormFlowDist(

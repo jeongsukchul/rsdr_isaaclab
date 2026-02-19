@@ -82,7 +82,7 @@ class FactoryTask:
     # Fixed-asset height fraction for which different bonuses are rewarded (see individual tasks).
     success_threshold: float = 0.04
     engage_threshold: float = 0.9
-
+    reward_scale : float = 1.0
 
 @configclass
 class Peg8mm(HeldAssetCfg):
@@ -182,7 +182,7 @@ class PegInsert(FactoryTask):
         actuators={},
     )
 
-
+    reward_scale : float = 1/1.6
 @configclass
 class GearBase(FixedAssetCfg):
     usd_path = f"{ASSET_DIR}/factory_gear_base.usd"
@@ -339,7 +339,7 @@ class GearMesh(FactoryTask):
         ),
         actuators={},
     )
-
+    reward_scale : float = 1/ 1.2
 
 @configclass
 class NutM16(HeldAssetCfg):
@@ -445,3 +445,4 @@ class NutThread(FactoryTask):
         ),
         actuators={},
     )
+    reward_scale : float = 1/0.65

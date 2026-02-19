@@ -122,17 +122,20 @@ def apply_learned_randomization(env, env_ids=None):
     if sampler is None:
         # fallback to original behavior
         raise ValueError("No sampler found on env; cannot apply learned randomization.")
-
-    master_values = sampler.sample(env.num_envs)
-    log_probs = sampler.log_prob(master_values)
-
+    print("reset with uniform dist? :", env._uniform_eval)
+    dist = env.sampler.get_test_dist() if env._uniform_eval else env.sampler.get_train_dist()
+    # dist = env.sampler.get_train_dist()
+    master_values = dist.sample((env.num_envs,)).detach()
+    # log_probs = sampler.log_prob(master_values).to(env.device).detach()
+    master_values = master_values.to(env.device)
+    env.dr_context[env_ids] = master_values
     # store for training / debugging
     if "dr_samples" not in env.extras:
         env.extras["dr_samples"] = torch.zeros((env.num_envs, sampler.num_params), device=env.device)
-        env.extras["dr_log_probs"] = torch.zeros((env.num_envs,), device=env.device)
+        # env.extras["dr_log_probs"] = torch.zeros((env.num_envs,), device=env.device)
 
     env.extras["dr_samples"][env_ids] = master_values
-    env.extras["dr_log_probs"][env_ids] = log_probs
+    # env.extras["dr_log_probs"][env_ids] = log_probs
 
     stiff_val = None
     damping_val = None
@@ -152,7 +155,7 @@ def apply_learned_randomization(env, env_ids=None):
 
     randomize_actuator_gain(env, env_ids, "robot", stiff_val, damping_val)
 
-    gravity_z = gravity_val.mean().item() if gravity_val is not None else None
+    # gravity_z = gravity_val.mean().item() if gravity_val is not None else None
 
     # Kinematics/state reset using the sampled pose noises
-    env.randomize_initial_state(env_ids, master_values=master_values, gravity_z=gravity_z)
+    env.randomize_initial_state(env_ids, master_values=master_values, dist=dist)
