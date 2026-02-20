@@ -10,7 +10,8 @@
 import argparse
 import sys
 from distutils.util import strtobool
-
+import os
+os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 from isaaclab.app import AppLauncher
 
 # add argparse arguments

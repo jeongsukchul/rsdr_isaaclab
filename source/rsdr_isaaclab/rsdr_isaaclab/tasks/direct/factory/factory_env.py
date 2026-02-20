@@ -505,11 +505,14 @@ class FactoryEnv(DirectRLEnv):
             )
             success_rate = torch.count_nonzero(curr_successes) / self.num_envs
             if not self._uniform_eval:
-                contexts = self.extras["dr_samples"].detach()
+                contexts = self.dr_context.detach()
                 returns  = self.ep_return.detach()
                 scaled_returns = returns / self.max_episode_length * self.cfg.task.reward_scale
                 if self.sampler.name == 'DORAEMON' or self.sampler.name == 'ADR':
                     self.sampler.update(contexts, curr_successes)
+                elif self.sampler.name == "GMMVI":
+                    mapping = self.mapping.detach()
+                    self.sampler.update(contexts, mapping, scaled_returns)
                 else:
                     self.sampler.update(contexts, scaled_returns)
             if env_ids is not None and len(env_ids) > 0 :

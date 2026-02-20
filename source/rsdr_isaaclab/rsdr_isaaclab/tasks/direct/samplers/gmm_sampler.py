@@ -1,5 +1,6 @@
 from .gmmvi.network import GMMTrainingState, create_gmm_network_and_state
 from .sampler import LearnableSampler
+import os
 import jax
 import jax.numpy as jnp
 import torch
@@ -20,7 +21,7 @@ class GMMVI(LearnableSampler):
                  **kwargs):
         super().__init__(cfg, device)
         self.name = "GMMVI"
-        bound_info = (self.low.tolist(), self.high.tolist())
+        bound_info = (torch_to_jax(self.low), torch_to_jax(self.high))
         rng = jax.random.PRNGKey(torch.cuda.initial_seed() % (2**32))
         self.rng, init_key = jax.random.split(rng) 
         init_gmmvi_state, gmm_network = create_gmm_network_and_state(cfg.total_params, \
@@ -49,8 +50,7 @@ class GMMVI(LearnableSampler):
         value_jax = torch_to_jax(value.to("cuda" if value.is_cuda else "cpu"))
         lp_jax = self.gmm_network.model.log_density(self.gmmvi_state.model_state.gmm_state, value_jax)
         return jax_to_torch(lp_jax).to(device=value.device)
-    def update(self, contexts, returns):
-        samples_torch, mapping_torch = contexts
+    def update(self, samples_torch, mapping_torch, returns):
 
         returns_jax  = torch_to_jax(returns)
         samples_jax  = torch_to_jax(samples_torch)
@@ -58,11 +58,10 @@ class GMMVI(LearnableSampler):
 
         target_lnpdfs = -returns_jax * self.beta
         self.rng, update_key = jax.random.split(self.rng)
-
         new_sample_db_state = self.gmm_network.sample_selector.save_samples(
             self.gmmvi_state.model_state,
             self.gmmvi_state.sample_db_state,
-            returns_jax,                 # or maybe "scores" depending on your API
+            samples_jax[...,None],                 # or maybe "scores" depending on your API
             target_lnpdfs,
             jnp.zeros_like(target_lnpdfs),
             mapping_jax

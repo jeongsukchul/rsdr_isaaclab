@@ -89,6 +89,7 @@ class ADR(LearnableSampler):
         super().__init__(cfg, device)
         self.name = "ADR"
         self.ndim = len(self.low)
+        self.success_threshold= success_threshold
         self.lower_threshold = success_threshold/2.0
         self.upper_threshold = success_threshold
         self.expansion_factor = expansion_factor
