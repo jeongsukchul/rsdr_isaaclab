@@ -60,7 +60,12 @@ class LearnableSampler(nn.Module):
     
     def get_test_dist(self):
         return UniformDist(self.low, self.high, self.device)
-        
+    def get_train_sample_fn(self):
+        dist = self.get_train_dist()
+        return lambda num_samples: dist.rsample((num_samples,))
+    def get_test_sample_fn(self):
+        dist = self.get_test_dist()
+        return lambda num_samples: dist.rsample((num_samples,))
 class NoDR(LearnableSampler):
     def __init__(self, cfg, device: str, **kwargs):
         super().__init__(cfg, device)

@@ -12,7 +12,7 @@ from . import agents
 ##
 
 gym.register(
-    id="Custom-Factory-PegInsert-Direct-v0",
+    id="Custom-Factory-PegInsert-Direct-UDR-v0",
     entry_point=f"{__name__}.factory_env:FactoryEnv",
     disable_env_checker=True,
     kwargs={
@@ -54,6 +54,15 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.factory_env_cfg:FactoryTaskPegInsert_GOFLOW_Cfg",
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+    },
+)
+gym.register(
+    id="Custom-Factory-PegInsert-Direct-GMMVI-v0",
+    entry_point=f"{__name__}.factory_env:FactoryEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.factory_env_cfg:FactoryTaskPegInsert_GMMVI_Cfg",
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
     },
 )

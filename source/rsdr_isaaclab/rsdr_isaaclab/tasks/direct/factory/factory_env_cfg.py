@@ -14,6 +14,7 @@ from isaaclab.sim.spawners.materials.physics_materials_cfg import RigidBodyMater
 from isaaclab.utils import configclass
 from rsdr_isaaclab.tasks.direct.samplers.sampler import LearnableSampler
 from rsdr_isaaclab.tasks.direct.samplers.sampler import UDR, ADR, NoDR, DORAEMON, GOFLOW
+from rsdr_isaaclab.tasks.direct.samplers.gmm_sampler import GMMVI
 
 from .factory_tasks_cfg import ASSET_DIR, FactoryTask, GearMesh, NutThread, PegInsert
 from .randomization_cfg import FactoryRandomizationCfg
@@ -120,7 +121,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         ),
     )
 
-    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=128, env_spacing=2.0, clone_in_fabric=True)
+    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=1024, env_spacing=2.0, clone_in_fabric=True)
 
     robot = ArticulationCfg(
         prim_path="/World/envs/env_.*/Robot",
@@ -230,6 +231,13 @@ class FactoryTaskPegInsert_GOFLOW_Cfg(FactoryTaskPegInsertCfg):
         num_training_iters=5,
         alpha=1.,
         beta=1.,
+    )
+@configclass
+class FactoryTaskPegInsert_GMMVI_Cfg(FactoryTaskPegInsertCfg):
+    sampler_class = GMMVI
+    sampler_kwargs = dict(
+        beta=1.,
+        batch_size=1024,
     )
 @configclass
 class FactoryTaskGearMeshCfg(FactoryEnvCfg):

@@ -123,19 +123,28 @@ def apply_learned_randomization(env, env_ids=None):
         # fallback to original behavior
         raise ValueError("No sampler found on env; cannot apply learned randomization.")
     print("reset with uniform dist? :", env._uniform_eval)
-    dist = env.sampler.get_test_dist() if env._uniform_eval else env.sampler.get_train_dist()
-    # dist = env.sampler.get_train_dist()
-    master_values = dist.sample((env.num_envs,)).detach()
-    master_values = master_values.to(device=env.dr_context.device, dtype=env.dr_context.dtype)
+    if env._uniform_eval:
+        sample_fn = env.sampler.get_test_sample_fn()
+        master_values = sample_fn(env.num_envs).detach()
+    else:
+        if env.sampler.name == "GMMVI":
+            sample_fn = env.sampler.get_train_sample_fn()
+            master_values, mapping = sample_fn(env.num_envs)
+            master_values = master_values.to(device=env.dr_context.device, dtype=env.dr_context.dtype)
+            mapping = mapping.to(device=env.dr_context.device, dtype=env.dr_context.dtype)
+            env.mapping  = mapping
+        else:
+            sample_fn = env.sampler.get_train_sample_fn()
+            master_values = sample_fn(env.num_envs).detach()
+            master_values = master_values.to(device=env.dr_context.device, dtype=env.dr_context.dtype)
     # log_probs = sampler.log_prob(master_values).to(env.device).detach()
-    master_values = master_values.to(env.device)
-    env.dr_context[env_ids] = master_values
+    env.dr_context = master_values
     # store for training / debugging
     if "dr_samples" not in env.extras:
         env.extras["dr_samples"] = torch.zeros((env.num_envs, sampler.num_params), device=env.device)
         # env.extras["dr_log_probs"] = torch.zeros((env.num_envs,), device=env.device)
 
-    env.extras["dr_samples"][env_ids] = master_values
+    env.extras["dr_samples"] = master_values
     # env.extras["dr_log_probs"][env_ids] = log_probs
 
     stiff_val = None
@@ -159,4 +168,4 @@ def apply_learned_randomization(env, env_ids=None):
     # gravity_z = gravity_val.mean().item() if gravity_val is not None else None
 
     # Kinematics/state reset using the sampled pose noises
-    env.randomize_initial_state(env_ids, master_values=master_values, dist=dist)
+    env.randomize_initial_state(env_ids, master_values=master_values, sample_fn=sample_fn)

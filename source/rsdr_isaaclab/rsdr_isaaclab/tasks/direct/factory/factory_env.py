@@ -90,6 +90,7 @@ class FactoryEnv(DirectRLEnv):
         self.ep_success_times = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
         self.ep_return = torch.zeros((self.num_envs,), dtype=torch.float32, device=self.device)
         self.dr_context = torch.zeros((self.num_envs, self.sampler.num_params), dtype=torch.float32, device=self.device)
+        self.mapping = torch.zeros((self.num_envs, self.sampler.num_params), dtype=torch.float32, device=self.device)
     def _setup_scene(self):
         """Initialize simulation scene."""
         spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg(), translation=(0.0, 0.0, -1.05))
@@ -666,7 +667,7 @@ class FactoryEnv(DirectRLEnv):
         self.scene.update(dt=self.physics_dt)
         self._compute_intermediate_values(dt=self.physics_dt)
 
-    def randomize_initial_state(self, env_ids, master_values: torch.Tensor | None = None, gravity_z: float | None = None, dist = None):
+    def randomize_initial_state(self, env_ids, master_values: torch.Tensor | None = None, gravity_z: float | None = None, sample_fn = None):
 
         """Randomize initial state and perform any episode-level randomization."""
         # Disable gravity.
@@ -773,8 +774,12 @@ class FactoryEnv(DirectRLEnv):
             else:
                 # learned sampler; resample ONLY for bad_envs each attempt (like your manager-based logic)
                 if ik_attempt > 0:
+                    print(f"IK attempt {ik_attempt}, num bad envs: {n_bad}")
                     
-                    new_vals = dist.sample((n_bad,))
+                    if self.sampler.name == "GMMVI":
+                        new_vals, new_mapping = sample_fn(n_bad) # TODO New Mapping should be updated
+                    else:
+                        new_vals = sample_fn(n_bad)
                     # overwrite ONLY the noise fields in master_values for these envs
                     for p in self.sampler.cfg.params:
                         if p.name in ("hand_init_pos_noise", "hand_init_orn_noise"):

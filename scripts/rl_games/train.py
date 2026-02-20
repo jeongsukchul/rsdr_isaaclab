@@ -260,6 +260,19 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             raise ValueError("Weights and Biases entity must be specified for tracking.")
         import wandb
         print("experiment name", experiment_name)
+        exp_name = experiment_name.split("-Direct")[0]
+        exp_name = exp_name.split("Factory")[-1]
+        sampler_name = env.unwrapped.sampler.name if hasattr(env.unwrapped, "sampler") and env.unwrapped.sampler is not None else "no_sampler"
+        group_name = f"{exp_name}_{sampler_name}"
+        if sampler_name == "GMMVI":
+            group_name += f"beta={env.unwrapped.sampler.beta}"
+        elif sampler_name == "GOFLOW":
+            group_name += f"beta={1/env.unwrapped.sampler.alpha}-gamma={env.unwrapped.sampler.beta}"
+        elif sampler_name == "DORAEMON":
+            group_name += f"thres={env.unwrapped.sampler.success_threshold}-rate={env.unwrapped.sampler.success_rate_condition}\
+                -kl={env.unwrapped.sampler.kl_upper_bound}"
+        elif sampler_name == "ADR":
+            group_name += f"thres={env.unwrapped.sampler.success_threshold}"
         wandb.init(
             project=wandb_project,
             entity=args_cli.wandb_entity,
@@ -267,6 +280,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             sync_tensorboard=True,
             monitor_gym=True,
             save_code=True,
+            group = group_name,
         )
         if not wandb.run.resumed:
             wandb.config.update({"env_cfg": env_cfg.to_dict()})
