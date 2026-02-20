@@ -27,6 +27,9 @@ class LearnableSampler(nn.Module):
             p_low = ensure_list(p.hard_bounds[0], p.size)
             p_high = ensure_list(p.hard_bounds[1], p.size)
             
+            for i in range(p.size):
+                if abs(p_low[i] - p_high[i]) < 1e-12:
+                    p_high[i] = p_low[i] + 1e-10
             init.extend(p_init)
             low.extend(p_low)
             high.extend(p_high)
@@ -573,9 +576,9 @@ class GOFLOW(LearnableSampler):
         self.alpha = alpha  # Weight for entropy maximization (KL to target)
         self.beta = beta    # Weight for similarity constraint (KL to previous)
         self.current_dist = NormFlowDist(
-            torch.tensor(self.low),
-            torch.tensor(self.high),
-            ndim=len(self.low)
+            self.low.detach().clone(),
+            self.high.detach().clone(),
+            ndim=self.low.numel()
         )
         self.dist_optimizer = torch.optim.Adam(self.current_dist.get_params(), lr=1e-3)
         self.dist_optimizer.zero_grad()
@@ -583,6 +586,9 @@ class GOFLOW(LearnableSampler):
         self.dist_history = []
         self.target_dist = UniformDist(self.low, self.high, self.device)
         self.max_loss = max_loss  # Add a maximum loss threshold
+        params = list(self.current_dist.get_params())
+        print("nparams:", len(params))
+        print([(p.shape, p.requires_grad, type(p)) for p in params])
     
     def get_test_dist(self):
         return self.target_dist
@@ -592,54 +598,57 @@ class GOFLOW(LearnableSampler):
 
     def update(self, contexts, returns, entropy_update=True):
         print("Updating the GOFLOW distribution")
-        R = torch.FloatTensor(returns).flatten().to(self.current_dist.device)
-        R_ = (R - R.mean()) / (R.std() + 1e-8)
-
+        # cpu = torch.device("cpu")
+        # returns = returns.view(-1).to(device=cpu)
+        # R = torch.FloatTensor(returns).flatten().to(self.current_dist.device)
+        # R_ = (R - R.mean()) / (R.std() + 1e-8)
+        contexts = contexts.to(self.current_dist.device, dtype=torch.float32)
+        R = returns.reshape(-1).to(self.current_dist.device, dtype=torch.float32)
+        R_ = (R - R.mean()) / (R.std(unbiased=False) + 1e-8)
         previous_dist = self.current_dist.clone()
 
         for iter in range(self.num_training_iters):
             self.dist_optimizer.zero_grad()
+            with torch.enable_grad():
+                log_prob = self.current_dist.log_prob(contexts)
+                log_prob = torch.clamp(log_prob, min=-1e6, max=1e6)  # Clamp log probabilities
 
-            log_prob = self.current_dist.log_prob(contexts)
-            log_prob = torch.clamp(log_prob, min=-1e6, max=1e6)  # Clamp log probabilities
+                z_target = self.target_dist.rsample([10000]).to(self.current_dist.device)
+                log_p_current = self.current_dist.log_prob(z_target)
+                log_p_target = self.target_dist.log_prob(z_target).to(self.current_dist.device)
+                
+                log_p_current = torch.clamp(log_p_current, min=-1e6, max=1e6)
+                log_p_target = torch.clamp(log_p_target, min=-1e6, max=1e6)
+                
+                if(entropy_update):
+                    kl_loss_target = self.target_dist.volume()*torch.mean(torch.exp(log_p_current)*log_p_current)
+                else:
+                    kl_loss_target = torch.mean(log_p_target - log_p_current)
+                
+                with torch.no_grad():
+                    z_previous = previous_dist.rsample([10000]).to(self.current_dist.device)
+                    log_p_previous = previous_dist.log_prob(z_previous)
+                    log_p_previous = torch.clamp(log_p_previous, min=-1e6, max=1e6)
+                
+                log_p_current_on_previous = self.current_dist.log_prob(z_previous)
+                log_p_current_on_previous = torch.clamp(log_p_current_on_previous, min=-1e6, max=1e6)
+                
+                kl_loss_similarity = torch.mean(log_p_previous - log_p_current_on_previous)
 
-            z_target = self.target_dist.rsample([10000]).to(self.current_dist.device)
-            log_p_current = self.current_dist.log_prob(z_target)
-            log_p_target = self.target_dist.log_prob(z_target).to(self.current_dist.device)
-            
-            log_p_current = torch.clamp(log_p_current, min=-1e6, max=1e6)
-            log_p_target = torch.clamp(log_p_target, min=-1e6, max=1e6)
-            
-            if(entropy_update):
-                kl_loss_target = self.target_dist.volume()*torch.mean(torch.exp(log_p_current)*log_p_current)
-            else:
-                kl_loss_target = torch.mean(log_p_target - log_p_current)
-            
-            with torch.no_grad():
-                z_previous = previous_dist.rsample([10000]).to(self.current_dist.device)
-                log_p_previous = previous_dist.log_prob(z_previous)
-                log_p_previous = torch.clamp(log_p_previous, min=-1e6, max=1e6)
-            
-            log_p_current_on_previous = self.current_dist.log_prob(z_previous)
-            log_p_current_on_previous = torch.clamp(log_p_current_on_previous, min=-1e6, max=1e6)
-            
-            kl_loss_similarity = torch.mean(log_p_previous - log_p_current_on_previous)
+                if(entropy_update):
+                    reward_loss = self.target_dist.volume()*((R_.detach() * log_prob * torch.exp(log_prob)).mean())
+                else:
+                    reward_loss = -((R_.detach() * log_prob).mean())
+                entropy_loss = self.alpha * kl_loss_target
+                similarity_loss = self.beta * kl_loss_similarity
+                total_loss = reward_loss + entropy_loss + similarity_loss
+                # Check if loss is finite
+                if not torch.isfinite(total_loss):
+                    print(f"Warning: Non-finite loss detected in iteration {iter}. Skipping update.")
+                    continue
 
-            if(entropy_update):
-                reward_loss = self.target_dist.volume()*((R_.detach() * log_prob * torch.exp(log_prob)).mean())
-            else:
-                reward_loss = -((R_.detach() * log_prob).mean())
-            entropy_loss = self.alpha * kl_loss_target
-            similarity_loss = self.beta * kl_loss_similarity
-            total_loss = reward_loss + entropy_loss + similarity_loss
-        
-            # Check if loss is finite
-            if not torch.isfinite(total_loss):
-                print(f"Warning: Non-finite loss detected in iteration {iter}. Skipping update.")
-                continue
-
-            # Clip the total loss
-            total_loss = torch.clamp(total_loss, max=self.max_loss)
+                # Clip the total loss
+                total_loss = torch.clamp(total_loss, max=self.max_loss)
 
             total_loss.backward()
             

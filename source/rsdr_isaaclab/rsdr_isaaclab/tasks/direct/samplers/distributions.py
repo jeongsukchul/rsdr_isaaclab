@@ -45,8 +45,9 @@ class UniformDist(Distr):
         """
         Calculate the volume of the hyper-rectangle defined by self.low and self.high.
         """
-        return torch.prod(torch.tensor(self.high) - torch.tensor(self.low))
-    
+        diff = self.high - self.low
+        diff_safe = torch.where(diff == 0, torch.ones_like(diff), diff)
+        return diff_safe.prod()
     def rsample(self, sample_shape=torch.Size()):
         shape = tuple(sample_shape) + (self.ndim,)
         out = self.low.expand(shape).clone()

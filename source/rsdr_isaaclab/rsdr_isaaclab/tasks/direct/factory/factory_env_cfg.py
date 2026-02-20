@@ -218,10 +218,10 @@ class FactoryTaskPegInsert_ADR_Cfg(FactoryTaskPegInsertCfg):
 class FactoryTaskPegInsert_DORAEMON_Cfg(FactoryTaskPegInsertCfg):
     sampler_class = DORAEMON
     sampler_kwargs = dict(
-        success_threshold=0.001,
+        success_threshold=0.6,
         kl_upper_bound=0.1,
         init_beta_param=100.0,
-        success_rate_condition=0.001,
+        success_rate_condition=0.6,
     )
 @configclass
 class FactoryTaskPegInsert_GOFLOW_Cfg(FactoryTaskPegInsertCfg):
