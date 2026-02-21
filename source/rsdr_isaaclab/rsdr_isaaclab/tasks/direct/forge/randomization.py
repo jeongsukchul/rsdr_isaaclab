@@ -169,9 +169,10 @@ def apply_learned_randomization(env, env_ids=None):
             factory_utils.set_friction(env._fixed_asset, vals, env.scene.num_envs)
         elif p_cfg.event_type == "held_friction":
             factory_utils.set_friction(env._held_asset, vals, env.scene.num_envs)
+            # handled in env.randomize_initial_state() below
+            pass
 
     randomize_actuator_gain(env, env_ids, "robot", stiff_val, damping_val)
-
     # gravity_z = gravity_val.mean().item() if gravity_val is not None else None
 
     # Kinematics/state reset using the sampled pose noises

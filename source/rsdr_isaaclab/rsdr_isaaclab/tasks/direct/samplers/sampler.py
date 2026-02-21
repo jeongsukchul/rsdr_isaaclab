@@ -5,7 +5,7 @@ from .distributions import UniformDist, BetasDist, BoundarySamplingDist, NormFlo
 import numpy as np
 from scipy.optimize import LinearConstraint, NonlinearConstraint, minimize, Bounds
 import time
-class LearnableSampler(nn.Module):
+class LearnableSampler:
     def __init__(self, cfg, device: str):
         super().__init__()
         self.cfg = cfg

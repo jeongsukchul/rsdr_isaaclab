@@ -55,15 +55,17 @@ class GMMVI(LearnableSampler):
         returns_jax  = torch_to_jax(returns)
         samples_jax  = torch_to_jax(samples_torch)
         mapping_jax  = torch_to_jax(mapping_torch)
-
+        # print("returns_jax", returns_jax.shape)
+        # print("samples_jax", samples_jax.shape)
+        # print("mapping_jax", mapping_jax.shape)
         target_lnpdfs = -returns_jax * self.beta
         self.rng, update_key = jax.random.split(self.rng)
         new_sample_db_state = self.gmm_network.sample_selector.save_samples(
             self.gmmvi_state.model_state,
             self.gmmvi_state.sample_db_state,
-            samples_jax[...,None],                 # or maybe "scores" depending on your API
+            samples_jax,                 # or maybe "scores" depending on your API
             target_lnpdfs,
-            jnp.zeros_like(target_lnpdfs),
+            jnp.zeros_like(samples_jax),
             mapping_jax
         )
 

@@ -46,6 +46,11 @@ parser.add_argument("--export_io_descriptors", action="store_true", default=Fals
 parser.add_argument(
     "--ray-proc-id", "-rid", type=int, default=None, help="Automatically configured by Ray integration, otherwise None."
 )
+parser.add_argument("--beta", type=float, default=None)
+parser.add_argument("--alpha", type=float, default=None)
+parser.add_argument("--success-threshold", type=float, default=None)
+parser.add_argument("--success-rate-condition", type=float, default=None)
+parser.add_argument("--kl-upper-bound", type=float, default=None)
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
@@ -187,7 +192,18 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
-
+    s = getattr(env.unwrapped, "sampler", None)
+    if s is not None:
+        if args_cli.alpha is not None:
+            s.alpha = args_cli.alpha
+        if args_cli.beta is not None:
+            s.beta = args_cli.beta
+        if args_cli.success_threshold is not None:
+            s.success_threshold = args_cli.success_threshold
+        if args_cli.success_rate_condition is not None:
+            s.success_rate_condition = args_cli.success_rate_condition
+        if args_cli.kl_upper_bound is not None:
+            s.kl_upper_bound = args_cli.kl_upper_bound
     # convert to single-agent instance if required by the RL algorithm
     if isinstance(env.unwrapped, DirectMARLEnv):
         env = multi_agent_to_single_agent(env)
@@ -245,7 +261,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # runner = Runner(observer)
     observers = MultiObserver([
         IsaacAlgoObserver(),
-        UniformEvalObserver(eval_every=5, eval_episodes=1, deterministic=True),
+        UniformEvalObserver(eval_every=20, eval_episodes=10, deterministic=True),
     ])
 
     runner = Runner(observers)
@@ -262,18 +278,18 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         import wandb
         print("experiment name", experiment_name)
         exp_name = experiment_name.split("-Direct")[0]
-        exp_name = exp_name.split("Factory")[-1]
+        exp_name = exp_name.split("Factory-")[-1]
         sampler_name = env.unwrapped.sampler.name if hasattr(env.unwrapped, "sampler") and env.unwrapped.sampler is not None else "no_sampler"
         group_name = f"{exp_name}_{sampler_name}"
         if sampler_name == "GMMVI":
-            group_name += f"beta={env.unwrapped.sampler.beta}"
+            group_name += f"-beta={env.unwrapped.sampler.beta}"
         elif sampler_name == "GOFLOW":
-            group_name += f"beta={1/env.unwrapped.sampler.alpha}-gamma={env.unwrapped.sampler.beta}"
+            group_name += f"-beta={1/env.unwrapped.sampler.alpha}-gamma={env.unwrapped.sampler.beta}"
         elif sampler_name == "DORAEMON":
-            group_name += f"thres={env.unwrapped.sampler.success_threshold}-rate={env.unwrapped.sampler.success_rate_condition}\
+            group_name += f"-thres={env.unwrapped.sampler.success_threshold}-rate={env.unwrapped.sampler.success_rate_condition}\
                 -kl={env.unwrapped.sampler.kl_upper_bound}"
         elif sampler_name == "ADR":
-            group_name += f"thres={env.unwrapped.sampler.success_threshold}"
+            group_name += f"-thres={env.unwrapped.sampler.success_threshold}"
         wandb.init(
             project=wandb_project,
             entity=args_cli.wandb_entity,
