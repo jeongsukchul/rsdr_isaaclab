@@ -27,7 +27,23 @@ class UniformEvalObserver(IsaacAlgoObserver):
         metrics_accum = {}
         completed = 0
         rewards = None
+        import copy
 
+        # --- snapshot training counters/state that env_step/env_reset may mutate ---
+        saved = {}
+
+        # common counters across rl-games algos (not all exist in every algo)
+        for k in ("frame", "total_frames", "agent_steps", "env_steps", "game_steps"):
+            if hasattr(self.algo, k):
+                saved[k] = getattr(self.algo, k)
+
+        # rnn state can be mutated in eval loop
+        if hasattr(self.algo, "rnn_states"):
+            saved["rnn_states"] = copy.deepcopy(self.algo.rnn_states)
+
+        # some algos keep current obs internally
+        if hasattr(self.algo, "obs"):
+            saved["obs"] = copy.deepcopy(self.algo.obs)
         try:
             print("first reset with uniform dist!")
             obs = self.algo.env_reset()
@@ -72,6 +88,11 @@ class UniformEvalObserver(IsaacAlgoObserver):
             if hasattr(self.algo, "obs"):
                 self.algo.obs = obs
             self.algo.set_train()
+            for k, v in saved.items():
+                try:
+                    setattr(self.algo, k, v)
+                except Exception:
+                    pass
         for k, v in dict(getattr(factory_env, "extras", {})).items():
             if "eval" in k:
                 # print(f"Evalation: Logging {k}={v} from env infos.")
