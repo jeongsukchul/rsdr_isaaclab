@@ -301,7 +301,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         )
         if not wandb.run.resumed:
             wandb.config.update({"env_cfg": env_cfg.to_dict()})
-            wandb.config.update({"agent_cfg": agent_cfg})
+            wandb.config.update({"agent_cfg": agent_cfg, "group":group_name})
 
     if args_cli.checkpoint is not None:
         runner.run({"train": True, "play": False, "sigma": train_sigma, "checkpoint": resume_path})
