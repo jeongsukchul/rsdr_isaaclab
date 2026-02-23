@@ -182,7 +182,7 @@ class PegInsert(FactoryTask):
         actuators={},
     )
 
-    reward_scale : float = 1/1.6
+    reward_scale : float = 0.25
 @configclass
 class GearBase(FixedAssetCfg):
     usd_path = f"{ASSET_DIR}/factory_gear_base.usd"
