@@ -81,6 +81,10 @@ class UniformEvalObserver(IsaacAlgoObserver):
                         rewards = torch.zeros_like(rew)
                     rewards += rew
         finally:
+            for k, v in dict(getattr(factory_env, "extras", {})).items():
+                if "eval" in k:
+                    # print(f"Evalation: Logging {k}={v} from env infos.")
+                    self.writer.add_scalar(f"{k}", v, frame)
             factory_env.set_uniform_eval(False)
             factory_env._first_reset = True  # ensure env resets properly after eval
             obs = self.algo.env_reset()
@@ -93,7 +97,3 @@ class UniformEvalObserver(IsaacAlgoObserver):
                     setattr(self.algo, k, v)
                 except Exception:
                     pass
-        for k, v in dict(getattr(factory_env, "extras", {})).items():
-            if "eval" in k:
-                # print(f"Evalation: Logging {k}={v} from env infos.")
-                self.writer.add_scalar(f"{k}", v, frame)
