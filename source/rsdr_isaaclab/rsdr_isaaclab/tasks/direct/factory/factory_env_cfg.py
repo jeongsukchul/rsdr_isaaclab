@@ -121,7 +121,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
         ),
     )
 
-    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=1024, env_spacing=2.0, clone_in_fabric=True)
+    scene: InteractiveSceneCfg = InteractiveSceneCfg(num_envs=128, env_spacing=2.0, clone_in_fabric=True)
 
     robot = ArticulationCfg(
         prim_path="/World/envs/env_.*/Robot",
