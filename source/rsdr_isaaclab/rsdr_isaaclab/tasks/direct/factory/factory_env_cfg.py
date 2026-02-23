@@ -237,7 +237,7 @@ class FactoryTaskPegInsert_GMMVI_Cfg(FactoryTaskPegInsertCfg):
     sampler_class = GMMVI
     sampler_kwargs = dict(
         beta=1.,
-        batch_size=1024,
+        batch_size=128,
     )
 @configclass
 class FactoryTaskGearMeshCfg(FactoryEnvCfg):
