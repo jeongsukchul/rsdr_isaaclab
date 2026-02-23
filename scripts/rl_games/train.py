@@ -300,6 +300,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             group = group_name,
         )
         env_cfg.group = group_name
+        agent_cfg['group'] = group_name
         if not wandb.run.resumed:
             wandb.config.update({"env_cfg": env_cfg.to_dict()})
             wandb.config.update({"agent_cfg": agent_cfg, "group":group_name})
