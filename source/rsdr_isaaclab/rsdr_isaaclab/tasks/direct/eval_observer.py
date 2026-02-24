@@ -3,11 +3,12 @@ import torch
 from rl_games.common.algo_observer import IsaacAlgoObserver
 
 class UniformEvalObserver(IsaacAlgoObserver):
-    def __init__(self, eval_every=1, eval_episodes=3, deterministic=True, tb_prefix=""):
+    def __init__(self, eval_every=1, eval_episodes=3, deterministic=True, tb_prefix="", log_step="epoch"):
         self.eval_every = int(eval_every)
         self.eval_episodes = int(eval_episodes)
         self.deterministic = bool(deterministic)
         self.tb_prefix = tb_prefix
+        self.log_step = str(log_step)
         self.algo = None
 
     def after_print_stats(self, frame, epoch_num, total_time):
@@ -81,10 +82,6 @@ class UniformEvalObserver(IsaacAlgoObserver):
                         rewards = torch.zeros_like(rew)
                     rewards += rew
         finally:
-            for k, v in dict(getattr(factory_env, "extras", {})).items():
-                if "eval" in k:
-                    # print(f"Evalation: Logging {k}={v} from env infos.")
-                    self.writer.add_scalar(f"{k}", v, frame)
             factory_env.set_uniform_eval(False)
             factory_env._first_reset = True  # ensure env resets properly after eval
             obs = self.algo.env_reset()
@@ -97,3 +94,8 @@ class UniformEvalObserver(IsaacAlgoObserver):
                     setattr(self.algo, k, v)
                 except Exception:
                     pass
+        step = epoch_num if self.log_step == "epoch" else frame
+        for k, v in dict(getattr(factory_env, "extras", {})).items():
+            if "eval" in k:
+                # print(f"Evalation: Logging {k}={v} from env infos.")
+                self.algo.writer.add_scalar(f"{k}", v, step)

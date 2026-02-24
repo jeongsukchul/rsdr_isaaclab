@@ -261,7 +261,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # runner = Runner(observer)
     observers = MultiObserver([
         IsaacAlgoObserver(),
-        UniformEvalObserver(eval_every=20, eval_episodes=10, deterministic=True),
+        UniformEvalObserver(eval_every=20, eval_episodes=10, deterministic=True, log_step="epoch"),
     ])
 
     runner = Runner(observers)
