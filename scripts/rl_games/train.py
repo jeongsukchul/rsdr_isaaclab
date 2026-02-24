@@ -31,6 +31,17 @@ parser.add_argument(
 parser.add_argument("--checkpoint", type=str, default=None, help="Path to model checkpoint.")
 parser.add_argument("--sigma", type=str, default=None, help="The policy's initial standard deviation.")
 parser.add_argument("--max_iterations", type=int, default=None, help="RL Policy training iterations.")
+parser.add_argument("--save_interval", type=int, default=None, help="Save checkpoint every N epochs.")
+parser.add_argument(
+    "--train_eval_observer",
+    type=lambda x: bool(strtobool(x)),
+    default=False,
+    nargs="?",
+    const=True,
+    help="Run evaluation observer inside training process (slower).",
+)
+parser.add_argument("--train_eval_every", type=int, default=20, help="In-process eval frequency in epochs.")
+parser.add_argument("--train_eval_episodes", type=int, default=10, help="Episodes per in-process eval.")
 parser.add_argument("--wandb-project-name", type=str, default="factory", help="the wandb's project name")
 parser.add_argument("--wandb-entity", type=str, default="tjrcjf410-seoul-national-university", help="the entity (team) of wandb's project")
 parser.add_argument("--wandb-name", type=str, default=None, help="the name of wandb's run")
@@ -127,6 +138,8 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     agent_cfg["params"]["config"]["max_epochs"] = (
         args_cli.max_iterations if args_cli.max_iterations is not None else agent_cfg["params"]["config"]["max_epochs"]
     )
+    if args_cli.save_interval is not None:
+        agent_cfg["params"]["config"]["save_frequency"] = args_cli.save_interval
     if args_cli.checkpoint is not None:
         resume_path = retrieve_file_path(args_cli.checkpoint)
         agent_cfg["params"]["load_checkpoint"] = True
@@ -240,30 +253,19 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # else:
     #     runner = Runner(IsaacAlgoObserver())
     # import copy
-    from rsdr_isaaclab.tasks.direct.eval_observer import UniformEvalObserver
-    # task = args_cli.task.split("-") 
-    # print("task : ", task)
-    # if len(task) >5:
-    #     eval_task = task[0] + "-" + task[1] + "-" + task[2] + "-" + task[3] + "-" + task[-1]
-    # print("eval_task: ", eval_task)
-    # eval_env_cfg = copy.deepcopy(env_cfg)
-    # eval_env_cfg.scene.num_envs = 1024  # smaller eval to reduce overhead (optional)
-    
-    # observer = UniformEvalObserver(
-    #     eval_task_id=eval_task,  # uniform DR env id
-    #     eval_env_cfg=eval_env_cfg,
-    #     rl_device=rl_device,
-    #     eval_every=1,
-    #     eval_episodes=10,
-    #     deterministic=True,
-    # )
+    observers_list = [IsaacAlgoObserver()]
+    if args_cli.train_eval_observer:
+        from rsdr_isaaclab.tasks.direct.eval_observer import UniformEvalObserver
 
-    # runner = Runner(observer)
-    observers = MultiObserver([
-        IsaacAlgoObserver(),
-        UniformEvalObserver(eval_every=20, eval_episodes=10, deterministic=True, log_step="epoch"),
-    ])
-
+        observers_list.append(
+            UniformEvalObserver(
+                eval_every=args_cli.train_eval_every,
+                eval_episodes=args_cli.train_eval_episodes,
+                deterministic=True,
+                log_step="epoch",
+            )
+        )
+    observers = MultiObserver(observers_list)
     runner = Runner(observers)
     runner.load(agent_cfg)
 

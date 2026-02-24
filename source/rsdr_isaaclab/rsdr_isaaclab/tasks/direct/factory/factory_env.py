@@ -535,7 +535,7 @@ class FactoryEnv(DirectRLEnv):
                 self.extras[f"{prefix}/episode_return_cvar20"] = ep_ret[ep_ret <= torch.quantile(ep_ret, 0.20)].mean()
                 self.extras[f"{prefix}/episode_return_cvar10"] = ep_ret[ep_ret <= torch.quantile(ep_ret, 0.10)].mean()
                 self.extras[f"{prefix}/episode_return_std"]  = ep_ret.std(unbiased=False)
-                self.extras[f"{prefix}/norm_ep_return"]      = ep_ret.mean() / self.max_episode_length
+                self.extras[f"{prefix}/norm_ep_return"]      = ep_ret.mean() / self.max_episode_length * self.cfg.task.reward_scale
                 # CRITICAL: reset accumulator even in eval
                 self.ep_return[env_ids] = 0.0
         self._first_reset = False
