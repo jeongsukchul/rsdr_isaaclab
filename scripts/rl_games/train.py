@@ -174,14 +174,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     seed = agent_cfg["params"]["seed"]
     log_dir = f"{args_cli.task}-rl_games-seed={seed}"
     if "GMMVI" in args_cli.task:
-        log_dir += f"-beta={env.unwrapped.sampler.beta}"
+        log_dir += f"-beta={args_cli.beta}"
     elif "GOFLOW" in args_cli.task:
-        log_dir += f"-beta={1/env.unwrapped.sampler.alpha}-gamma={env.unwrapped.sampler.beta}"
+        log_dir += f"-beta={1/args_cli.alpha}-gamma={args_cli.beta}"
     elif "DORAEMON" in args_cli.task:
-        log_dir += f"-thres={env.unwrapped.sampler.success_threshold}-rate={env.unwrapped.sampler.success_rate_condition}\
-            -kl={env.unwrapped.sampler.kl_upper_bound}"
+        log_dir += f"-thres={args_cli.success_threshold}-rate={args_cli.success_rate_condition}\
+            -kl={args_cli.kl_upper_bound}"
     elif "ADR" in args_cli.task:
-        log_dir += f"-thres={env.unwrapped.sampler.success_threshold}"
+        log_dir += f"-thres={args_cli.success_threshold}"
     # set directory into agent config
     # logging directory path: <train_dir>/<full_experiment_name>
     agent_cfg["params"]["config"]["train_dir"] = log_root_path
