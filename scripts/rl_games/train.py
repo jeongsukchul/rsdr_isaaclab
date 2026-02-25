@@ -173,14 +173,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # log_dir = agent_cfg["params"]["config"].get("full_experiment_name", datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
     seed = agent_cfg["params"]["seed"]
     log_dir = f"{args_cli.task}-rl_games-seed={seed}"
-    if sampler_name == "GMMVI":
+    if "GMMVI" in args_cli.task:
         log_dir += f"-beta={env.unwrapped.sampler.beta}"
-    elif sampler_name == "GOFLOW":
+    elif "GOFLOW" in args_cli.task:
         log_dir += f"-beta={1/env.unwrapped.sampler.alpha}-gamma={env.unwrapped.sampler.beta}"
-    elif sampler_name == "DORAEMON":
+    elif "DORAEMON" in args_cli.task:
         log_dir += f"-thres={env.unwrapped.sampler.success_threshold}-rate={env.unwrapped.sampler.success_rate_condition}\
             -kl={env.unwrapped.sampler.kl_upper_bound}"
-    elif sampler_name == "ADR":
+    elif "ADR" in args_cli.task:
         log_dir += f"-thres={env.unwrapped.sampler.success_threshold}"
     # set directory into agent config
     # logging directory path: <train_dir>/<full_experiment_name>

@@ -17,7 +17,8 @@ import random
 import re
 import sys
 import time
-
+import os
+os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 from distutils.util import strtobool
 
 from isaaclab.app import AppLauncher
@@ -308,10 +309,12 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             pending = [p for p in checkpoints if p not in evaluated]
 
         for checkpoint in pending:
+            import traceback
             try:
                 metrics = run_eval(checkpoint)
             except Exception as exc:
                 print(f"[WARN] Evaluation failed for {checkpoint}: {exc}")
+                traceback.print_exc()
                 evaluated.add(checkpoint)
                 continue
 
