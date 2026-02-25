@@ -245,13 +245,14 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         agent.restore(checkpoint_path)
         agent.reset()
 
+        
+
+        factory_env = raw_env.unwrapped
+        factory_env.set_uniform_eval(True)
         obs = env.reset()
         if isinstance(obs, dict):
             obs = obs["obs"]
         _ = agent.get_batch_size(obs, 1)
-
-        factory_env = raw_env.unwrapped
-        factory_env.set_uniform_eval(True)
         if agent.is_rnn:
             agent.init_rnn()
         try:
@@ -272,7 +273,6 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                             for s in agent.states:
                                 s[:, dones, :] = 0.0
         finally:
-            factory_env.set_uniform_eval(False)
             if hasattr(factory_env, "_first_reset"):
                 factory_env._first_reset = True
             env.reset()
