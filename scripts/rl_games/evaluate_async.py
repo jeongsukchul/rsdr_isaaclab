@@ -137,17 +137,76 @@ def _extract_step_from_ckpt_name(path: str) -> int | None:
         return int(m.group(1))
     return None
 
+def _extract_global_step_from_ckpt(path: str) -> int | None:
+    """Try to read training global step (frames/steps) from RL-Games checkpoint."""
+    try:
+        ckpt = torch.load(path, map_location="cpu")
+    except Exception:
+        return None
 
+    # Common keys seen in RL-Games / IsaacLab training runs
+    candidate_keys = [
+        "frame", "frames", "total_frames", "step", "steps",
+        "global_step", "env_steps", "num_frames",
+    ]
+
+    # sometimes nested
+    candidate_paths = [
+        ("frame",),
+        ("frames",),
+        ("total_frames",),
+        ("step",),
+        ("steps",),
+        ("global_step",),
+        ("env_steps",),
+        ("num_frames",),
+        ("stats", "frame"),
+        ("stats", "frames"),
+        ("counters", "frames"),
+        ("counters", "steps"),
+        ("config", "frame"),
+    ]
+
+    def get_nested(d, keys):
+        x = d
+        for k in keys:
+            if not isinstance(x, dict) or k not in x:
+                return None
+            x = x[k]
+        return x
+
+    # 1) flat keys
+    if isinstance(ckpt, dict):
+        for k in candidate_keys:
+            if k in ckpt:
+                v = ckpt[k]
+                if isinstance(v, (int, float)):
+                    return int(v)
+
+        # 2) nested keys
+        for kp in candidate_paths:
+            v = get_nested(ckpt, kp)
+            if isinstance(v, (int, float)):
+                return int(v)
+
+    return None
 def _find_checkpoints(ckpt_dir: str, checkpoint_glob: str, include_best: bool, best_name: str) -> list[str]:
     paths = glob.glob(os.path.join(ckpt_dir, checkpoint_glob))
     if include_best:
         best_path = os.path.join(ckpt_dir, f"{best_name}.pth")
         if os.path.exists(best_path):
             paths.append(best_path)
-    # de-duplicate and sort by mtime
-    paths = sorted(set(paths), key=os.path.getmtime)
-    return paths
 
+    # de-duplicate
+    paths = list(set(paths))
+
+    def sort_key(p: str):
+        step = _extract_step_from_ckpt_name(p)
+        # Put files without step at the end, but keep stable ordering by mtime
+        step_key = step if step is not None else 10**18
+        return (step_key, os.path.getmtime(p), p)
+
+    return sorted(paths, key=sort_key)
 
 @hydra_task_config(args_cli.task, args_cli.agent)
 def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agent_cfg: dict):
@@ -317,17 +376,27 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
                 traceback.print_exc()
                 evaluated.add(checkpoint)
                 continue
+            global_step = _extract_global_step_from_ckpt(checkpoint)
 
-            step = _extract_step_from_ckpt_name(checkpoint)
-            print(f"[INFO] step={step} metrics={metrics}")
+            print(f"[INFO] wandb_step={global_step} metrics={metrics}")
+
             if wandb is not None and metrics:
                 payload = {k: v for k, v in metrics.items()}
                 payload["async_eval/num_envs"] = float(args_cli.num_envs)
                 payload["async_eval/eval_episodes"] = float(args_cli.eval_episodes)
-                if step is not None:
-                    wandb.log(payload, step=step)
+                if global_step is not None:
+                    wandb.log(payload, step=global_step)
                 else:
                     wandb.log(payload)
+            # step = _extract_step_from_ckpt_name(checkpoint)
+            # if wandb is not None and metrics:
+            #     payload = {k: v for k, v in metrics.items()}
+            #     payload["async_eval/num_envs"] = float(args_cli.num_envs)
+            #     payload["async_eval/eval_episodes"] = float(args_cli.eval_episodes)
+            #     if step is not None:
+            #         wandb.log(payload, step=step)
+            #     else:
+            #         wandb.log(payload)
             evaluated.add(checkpoint)
 
         if args_cli.mode in ("latest", "all"):
