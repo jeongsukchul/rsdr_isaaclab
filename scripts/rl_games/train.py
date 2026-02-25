@@ -173,6 +173,15 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # log_dir = agent_cfg["params"]["config"].get("full_experiment_name", datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
     seed = agent_cfg["params"]["seed"]
     log_dir = f"{args_cli.task}-rl_games-seed={seed}"
+    if sampler_name == "GMMVI":
+        log_dir += f"-beta={env.unwrapped.sampler.beta}"
+    elif sampler_name == "GOFLOW":
+        log_dir += f"-beta={1/env.unwrapped.sampler.alpha}-gamma={env.unwrapped.sampler.beta}"
+    elif sampler_name == "DORAEMON":
+        log_dir += f"-thres={env.unwrapped.sampler.success_threshold}-rate={env.unwrapped.sampler.success_rate_condition}\
+            -kl={env.unwrapped.sampler.kl_upper_bound}"
+    elif sampler_name == "ADR":
+        log_dir += f"-thres={env.unwrapped.sampler.success_threshold}"
     # set directory into agent config
     # logging directory path: <train_dir>/<full_experiment_name>
     agent_cfg["params"]["config"]["train_dir"] = log_root_path
@@ -202,7 +211,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
 
     # set the log directory for the environment (works for all environment types)
     env_cfg.log_dir = os.path.join(log_root_path, log_dir)
-
+    
     # create isaac environment
     env = gym.make(args_cli.task, cfg=env_cfg, render_mode="rgb_array" if args_cli.video else None)
     s = getattr(env.unwrapped, "sampler", None)
