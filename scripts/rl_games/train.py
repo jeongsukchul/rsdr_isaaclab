@@ -13,7 +13,7 @@ from distutils.util import strtobool
 import os
 os.environ['XLA_PYTHON_CLIENT_PREALLOCATE'] = 'false'
 from isaaclab.app import AppLauncher
-
+import shutil
 # add argparse arguments
 parser = argparse.ArgumentParser(description="Train an RL agent with RL-Games.")
 parser.add_argument("--video", action="store_true", default=False, help="Record videos during training.")
@@ -87,7 +87,7 @@ import random
 from datetime import datetime
 
 from rl_games.common import env_configurations, vecenv
-from rl_games.common.algo_observer import IsaacAlgoObserver
+from rsdr_isaaclab.wandb_observer import IsaacWandbAlgoObserver
 from rl_games.torch_runner import Runner
 
 from isaaclab.envs import (
@@ -167,8 +167,9 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         log_root_path = os.path.join(agent_cfg["pbt"]["directory"], log_root_path)
     else:
         log_root_path = os.path.abspath(log_root_path)
-
+    log_root_path = os.path.abspath(log_root_path)
     print(f"[INFO] Logging experiment in directory: {log_root_path}")
+
     # specify directory for logging runs
     # log_dir = agent_cfg["params"]["config"].get("full_experiment_name", datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
     seed = agent_cfg["params"]["seed"]
@@ -188,7 +189,11 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     agent_cfg["params"]["config"]["full_experiment_name"] = log_dir
     wandb_project = config_name if args_cli.wandb_project_name is None else args_cli.wandb_project_name
     experiment_name = log_dir if args_cli.wandb_name is None else args_cli.wandb_name
+    run_path = os.path.join(log_root_path, log_dir)
 
+    if os.path.isdir(run_path):
+        print(f"[INFO] Removing existing run directory: {run_path}")
+        shutil.rmtree(run_path)
     # dump the configuration into log-directory
     dump_yaml(os.path.join(log_root_path, log_dir, "params", "env.yaml"), env_cfg)
     dump_yaml(os.path.join(log_root_path, log_dir, "params", "agent.yaml"), agent_cfg)
@@ -262,7 +267,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # else:
     #     runner = Runner(IsaacAlgoObserver())
     # import copy
-    observers_list = [IsaacAlgoObserver()]
+    observers_list = [IsaacWandbAlgoObserver()]
     if args_cli.train_eval_observer:
         from rsdr_isaaclab.tasks.direct.eval_observer import UniformEvalObserver
 
@@ -305,7 +310,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
             project=wandb_project,
             entity=args_cli.wandb_entity,
             name=experiment_name,
-            sync_tensorboard=True,
+            sync_tensorboard=False,
             monitor_gym=True,
             save_code=True,
             group = group_name,

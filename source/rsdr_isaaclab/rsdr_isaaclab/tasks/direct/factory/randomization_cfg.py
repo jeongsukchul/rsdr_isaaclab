@@ -40,19 +40,19 @@ class FactoryRandomizationCfg:
             self.params = [
                 # --- Physics (Dynamics) ---
                 # 1. Stiffness (7 DoF)
-                # RandomizationParamCfg(
-                #     name="stiffness", size=7, sampler_type="uniform",
-                #     hard_bounds=([0.75]*7, [1.25]*7), 
-                #     init_params=([1.]*7), # Start near nominal
-                #     event_type="stiffness", target_asset="robot",
-                # ),
-                # # 2. Damping (7 DoF)
-                # RandomizationParamCfg(
-                #     name="damping", size=7, sampler_type="uniform",
-                #     hard_bounds=([0.75]*7, [1.25]*7), 
-                #     init_params=([1.0]*7),
-                #     event_type="damping", target_asset="robot"
-                # ),
+                RandomizationParamCfg(
+                    name="stiffness", size=7, sampler_type="uniform",
+                    hard_bounds=([0.75]*7, [1.25]*7), 
+                    init_params=([1.]*7), # Start near nominal
+                    event_type="stiffness", target_asset="robot",
+                ),
+                # 2. Damping (7 DoF)
+                RandomizationParamCfg(
+                    name="damping", size=7, sampler_type="uniform",
+                    hard_bounds=([0.75]*7, [1.25]*7), 
+                    init_params=([1.0]*7),
+                    event_type="damping", target_asset="robot"
+                ),
                  # Friction
                 RandomizationParamCfg(
                     name="robot_friction", size=1, sampler_type="uniform",
