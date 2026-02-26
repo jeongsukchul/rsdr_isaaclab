@@ -56,19 +56,19 @@ class FactoryRandomizationCfg:
                  # Friction
                 RandomizationParamCfg(
                     name="robot_friction", size=1, sampler_type="uniform",
-                    hard_bounds=([0.5], [1.2]), 
+                    hard_bounds=([0.3], [2.0]), 
                     init_params=([0.75]),
                     event_type="friction", target_asset="robot"
                 ),
                 RandomizationParamCfg(
                     name="held_friction", size=1, sampler_type="uniform",
-                    hard_bounds=([0.5], [1.2]), 
+                    hard_bounds=([0.3], [2.0]), 
                     init_params=([0.75]),
                     event_type="friction", target_asset="robot"
                 ),
                 RandomizationParamCfg(
                     name="fixed_friction", size=1, sampler_type="uniform",
-                    hard_bounds=([0.5], [1.2]), 
+                    hard_bounds=([0.3], [2.0]), 
                     init_params=([0.75]),
                     event_type="friction", target_asset="robot"
                 ),
