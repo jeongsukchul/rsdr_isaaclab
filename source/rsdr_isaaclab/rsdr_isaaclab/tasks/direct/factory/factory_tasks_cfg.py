@@ -57,7 +57,7 @@ class FactoryTask:
     unidirectional_rot: bool = False
 
     # Fixed Asset (applies to all tasks)
-    fixed_asset_init_pos_noise: list = [0.05, 0.05, 0.05]
+    fixed_asset_init_pos_noise: list = [0.1, 0.1, 0.1]
     fixed_asset_init_orn_deg: float = 0.0
     fixed_asset_init_orn_range_deg: float = 360.0
 
@@ -115,7 +115,7 @@ class PegInsert(FactoryTask):
     hand_init_orn_noise: list = [0.0, 0.0, 0.785]
 
     # Fixed Asset (applies to all tasks)
-    fixed_asset_init_pos_noise: list = [0.05, 0.05, 0.05]
+    fixed_asset_init_pos_noise: list = [0.075, 0.075, 0.075]
     fixed_asset_init_orn_deg: float = 0.0
     fixed_asset_init_orn_range_deg: float = 360.0
 

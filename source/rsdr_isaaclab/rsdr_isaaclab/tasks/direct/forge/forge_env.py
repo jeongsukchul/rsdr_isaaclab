@@ -267,7 +267,63 @@ class ForgeEnv(FactoryEnv):
     def _reset_idx(self, env_ids):
         """Perform additional randomizations."""
         super()._reset_idx(env_ids)
+        if not self._first_reset:
+            check_rot = self.cfg_task.name == "nut_thread"
+            curr_successes = self._get_curr_successes(
+                success_threshold=self.cfg_task.success_threshold, check_rot=check_rot
+            )
+            success_rate = torch.count_nonzero(curr_successes) / self.num_envs
+            if not self._uniform_eval:
+                contexts = self.dr_context.detach()
+                returns  = self.ep_return.detach()
+                scaled_returns = returns / self.max_episode_length * self.cfg.task.reward_scale
+                if self.sampler.name == 'DORAEMON' or self.sampler.name == 'ADR':
+                    self.sampler.update(contexts, curr_successes)
+                elif self.sampler.name == "GMMVI":
+                    mapping = self.mapping.detach()
+                    self.sampler.update(contexts, mapping, scaled_returns)
+                else:
+                    self.sampler.update(contexts, scaled_returns)
+            if env_ids is not None and len(env_ids) > 0 :
+                ep_ret = self.ep_return[env_ids]
+                prefix = "eval" if self._uniform_eval else "train"
+                ds = self.extras["dr_samples"]
+                
+                self.extras[f"{prefix}/dr_samples_mean"] = ds.mean()
+                self.extras[f"{prefix}/dr_samples_std"]  = ds.std(unbiased=False)
+                self.extras[f"{prefix}/successes"] = success_rate   
+                self.extras[f"{prefix}/episode_return"]      = ep_ret.mean()
+                self.extras[f"{prefix}/episode_return_min"]  = ep_ret.min()
+                self.extras[f"{prefix}/episode_return_max"]  = ep_ret.max()
+                self.extras[f"{prefix}/episode_return_p75"]  = torch.quantile(ep_ret, 0.75)
+                self.extras[f"{prefix}/episode_return_p50"]  = torch.quantile(ep_ret, 0.50)
+                self.extras[f"{prefix}/episode_return_p25"]  = torch.quantile(ep_ret, 0.25)
+                self.extras[f"{prefix}/episode_return_p20"]  = torch.quantile(ep_ret, 0.20)
+                self.extras[f"{prefix}/episode_return_p10"]  = torch.quantile(ep_ret, 0.10)
+                self.extras[f"{prefix}/episode_return_p05"]  = torch.quantile(ep_ret, 0.05)
+                self.extras[f"{prefix}/episode_return_cvar20"] = ep_ret[ep_ret <= torch.quantile(ep_ret, 0.20)].mean()
+                self.extras[f"{prefix}/episode_return_cvar10"] = ep_ret[ep_ret <= torch.quantile(ep_ret, 0.10)].mean()
+                self.extras[f"{prefix}/episode_return_std"]  = ep_ret.std(unbiased=False)
+                self.extras[f"{prefix}/norm_ep_return"]      = ep_ret.mean() / self.max_episode_length * self.cfg.task.reward_scale
+                # CRITICAL: reset accumulator even in eval
+                self.ep_return[env_ids] = 0.0
+        self._first_reset = False
+            
+        self._set_assets_to_default_pose(env_ids)
+        self._set_franka_to_default_pose(joints=self.cfg.ctrl.reset_joints, env_ids=env_ids)
+        self.step_sim_no_action()
+        ref_volume = self.sampler.volume(self.sampler.low, self.sampler.high)
+        self.extras[f"train/ref_entropy"] = 1/ref_volume * torch.log(torch.tensor(ref_volume)).item()
+        self.extras[f"train/ref_volume"]  = ref_volume
+        if self.sampler.name == "ADR":
+            self.extras[f"train/current_volume"]  = self.sampler.volume(self.sampler.current_low, self.sampler.current_high)
+        elif self.sampler.name == "DORAEMON":
+            self.extras[f"train/current_entropy"]  = self.sampler.entropy()
 
+        dr_randomization.apply_learned_randomization(self, env_ids)
+
+
+        #---------------------------------------------------------------------------------------------#
         # Compute initial action for correct EMA computation.
         fixed_pos_action_frame = self.fixed_pos_obs_frame + self.init_fixed_pos_obs_noise
         pos_actions = self.fingertip_midpoint_pos - fixed_pos_action_frame
@@ -295,25 +351,25 @@ class ForgeEnv(FactoryEnv):
         self.actions[:, 6] = self.prev_actions[:, 6] = -1.0
 
         # EMA randomization.
-        ema_rand = torch.rand((self.num_envs, 1), dtype=torch.float32, device=self.device)
-        ema_lower, ema_upper = self.cfg.ctrl.ema_factor_range
-        self.ema_factor = ema_lower + ema_rand * (ema_upper - ema_lower)
+        # ema_rand = torch.rand((self.num_envs, 1), dtype=torch.float32, device=self.device)
+        # ema_lower, ema_upper = self.cfg.ctrl.ema_factor_range
+        # self.ema_factor = ema_lower + ema_rand * (ema_upper - ema_lower)
 
         # Set initial gains for the episode.
-        prop_gains = self.default_gains.clone()
-        self.pos_threshold = self.default_pos_threshold.clone()
-        self.rot_threshold = self.default_rot_threshold.clone()
-        prop_gains = forge_utils.get_random_prop_gains(
-            prop_gains, self.cfg.ctrl.task_prop_gains_noise_level, self.num_envs, self.device
-        )
-        self.pos_threshold = forge_utils.get_random_prop_gains(
-            self.pos_threshold, self.cfg.ctrl.pos_threshold_noise_level, self.num_envs, self.device
-        )
-        self.rot_threshold = forge_utils.get_random_prop_gains(
-            self.rot_threshold, self.cfg.ctrl.rot_threshold_noise_level, self.num_envs, self.device
-        )
-        self.task_prop_gains = prop_gains
-        self.task_deriv_gains = factory_utils.get_deriv_gains(prop_gains)
+        # prop_gains = self.default_gains.clone()
+        # self.pos_threshold = self.default_pos_threshold.clone()
+        # self.rot_threshold = self.default_rot_threshold.clone()
+        # prop_gains = forge_utils.get_random_prop_gains(
+        #     prop_gains, self.cfg.ctrl.task_prop_gains_noise_level, self.num_envs, self.device
+        # )
+        # self.pos_threshold = forge_utils.get_random_prop_gains(
+        #     self.pos_threshold, self.cfg.ctrl.pos_threshold_noise_level, self.num_envs, self.device
+        # )
+        # self.rot_threshold = forge_utils.get_random_prop_gains(
+        #     self.rot_threshold, self.cfg.ctrl.rot_threshold_noise_level, self.num_envs, self.device
+        # )
+        # self.task_prop_gains = prop_gains
+        # self.task_deriv_gains = factory_utils.get_deriv_gains(prop_gains)
 
         contact_rand = torch.rand((self.num_envs,), dtype=torch.float32, device=self.device)
         contact_lower, contact_upper = self.cfg.task.contact_penalty_threshold_range

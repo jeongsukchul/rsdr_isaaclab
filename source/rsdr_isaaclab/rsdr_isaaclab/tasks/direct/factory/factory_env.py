@@ -37,6 +37,8 @@ class FactoryEnv(DirectRLEnv):
 
         factory_utils.set_body_inertias(self._robot, self.scene.num_envs)
         self.sampler = cfg.sampler_class(cfg.randomization, self.device, **getattr(cfg, "sampler_kwargs", {}))
+        print("dr low: ", self.sampler.low)
+        print("dr high: ", self.sampler.high)
         self._init_tensors()
         self._set_default_dynamics_parameters()
         self._uniform_eval = False

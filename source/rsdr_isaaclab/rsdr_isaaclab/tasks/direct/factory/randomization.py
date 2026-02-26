@@ -48,40 +48,11 @@ def _broadcast_multiplier(vals: torch.Tensor, target_width: int) -> torch.Tensor
     return vals.mean(dim=1, keepdim=True).repeat(1, target_width)
 
 
-def randomize_actuator_gain(env, env_ids, asset_name: str, stiff_values: torch.Tensor | None, damping_values: torch.Tensor | None):
+def randomize_actuator_gain(env, vals):
     """Multiply default joint stiffness/damping by per-env multipliers."""
-    if stiff_values is None and damping_values is None:
-        return
-
-    asset = _get_articulation(env, asset_name)
-
-    # If the robot arm is torque-controlled and has zero stiffness, this may be a no-op; that's fine.
-    for actuator in asset.actuators.values():
-        joint_ids = actuator.joint_indices  # slice or Tensor
-        # Determine how many joints this actuator controls
-        if isinstance(joint_ids, slice):
-            # Need width: infer from actuator tensors
-            width = actuator.stiffness.shape[1] if hasattr(actuator, "stiffness") else actuator.damping.shape[1]
-        else:
-            width = int(joint_ids.numel())
-
-        # stiffness
-        if stiff_values is not None and hasattr(actuator, "stiffness"):
-            mult = _broadcast_multiplier(stiff_values, width)  # (N, width)
-            base = asset.data.default_joint_stiffness[env_ids][:, joint_ids].clone()
-            new_stiff = base * mult
-            actuator.stiffness[env_ids] = new_stiff
-            asset.write_joint_stiffness_to_sim(new_stiff, joint_ids=joint_ids, env_ids=env_ids)
-
-        # damping
-        if damping_values is not None and hasattr(actuator, "damping"):
-            mult = _broadcast_multiplier(damping_values, width)
-            base = asset.data.default_joint_damping[env_ids][:, joint_ids].clone()
-            new_damp = base * mult
-            actuator.damping[env_ids] = new_damp
-            if isinstance(actuator, ImplicitActuator):
-                asset.write_joint_damping_to_sim(new_damp, joint_ids=joint_ids, env_ids=env_ids)
-
+    env.default_gains = torch.tensor(env.cfg.ctrl.default_task_prop_gains, device=env.device).repeat(
+            (env.num_envs, 1)
+        ) * vals
 
 def randomize_mass(env, env_ids, asset_name: str, values: torch.Tensor, body_ids=None):
     """Set mass = default_mass * values for selected bodies."""
@@ -103,7 +74,7 @@ def randomize_mass(env, env_ids, asset_name: str, values: torch.Tensor, body_ids
 
     masses[env_ids[:, None], body_ids] = default * values
     asset.root_physx_view.set_masses(masses, env_ids)
-
+    
 
 def apply_learned_randomization(env, env_ids=None):
     """
@@ -157,8 +128,8 @@ def apply_learned_randomization(env, env_ids=None):
         vals = master_values[:, p_cfg.indices]
         if p_cfg.event_type == "stiffness":
             stiff_val = vals
-        elif p_cfg.event_type == "damping":
-            damping_val = vals
+        # elif p_cfg.event_type == "damping":
+        #     damping_val = vals
         elif p_cfg.event_type == "mass":
             randomize_mass(env, env_ids, p_cfg.target_asset, vals, p_cfg.target_indices)
         elif p_cfg.event_type == "gravity":
@@ -169,9 +140,19 @@ def apply_learned_randomization(env, env_ids=None):
             factory_utils.set_friction(env._fixed_asset, vals, env.scene.num_envs)
         elif p_cfg.event_type == "held_friction":
             factory_utils.set_friction(env._held_asset, vals, env.scene.num_envs)
-
-    randomize_actuator_gain(env, env_ids, "robot", stiff_val, damping_val)
-
+        elif p_cfg.event_type == "pos_threshold":
+            env.pos_thrsehold = torch.tensor(env.cfg.ctrl.pos_action_threshold, device=vals.device, dtype=vals.dtype) * vals
+        elif p_cfg.event_type == "rot_threshold":
+            env.rot_threshold =torch.tensor(env.cfg.ctrl.rot_action_threshold, device=vals.device, dtype=vals.dtype) * vals
+        elif p_cfg.event_type == "ema":
+            env.ema_factor = vals
+    randomize_actuator_gain(env, stiff_val)
+    # self.pos_threshold = forge_utils.get_random_prop_gains(
+    #         self.pos_threshold, self.cfg.ctrl.pos_threshold_noise_level, self.num_envs, self.device
+    #     )
+    # self.rot_threshold = forge_utils.get_random_prop_gains(
+    #         self.rot_threshold, self.cfg.ctrl.rot_threshold_noise_level, self.num_envs, self.device
+    #     )
     # gravity_z = gravity_val.mean().item() if gravity_val is not None else None
 
     # Kinematics/state reset using the sampled pose noises
