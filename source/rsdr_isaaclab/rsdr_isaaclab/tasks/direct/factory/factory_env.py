@@ -550,6 +550,7 @@ class FactoryEnv(DirectRLEnv):
         self.extras[f"train/ref_volume"]  = ref_volume
         if self.sampler.name == "ADR":
             self.extras[f"train/current_volume"]  = self.sampler.volume(self.sampler.current_low, self.sampler.current_high)
+            self.extras[f"train/VolumeCoverage"]  = self.extras[f"train/current_volume"] / self.extras[f"train/ref_volume"]
         elif self.sampler.name == "DORAEMON":
             self.extras[f"train/current_entropy"]  = self.sampler.entropy()
 

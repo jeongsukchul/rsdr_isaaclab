@@ -50,7 +50,7 @@ class LearnableSampler:
         return self.current_dist.log_prob(value)
     def volume(self, low, high):
         diff = high - low
-        diff_safe = torch.where(diff == 0, torch.ones_like(diff), diff)
+        diff_safe = torch.where(diff < 1e-6, torch.ones_like(diff), diff)
         return diff_safe.prod()
     def update(self, contexts, returns):
         pass

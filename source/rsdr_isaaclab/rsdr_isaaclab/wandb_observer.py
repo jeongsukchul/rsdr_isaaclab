@@ -83,9 +83,15 @@ class DefaultAlgoObserver(AlgoObserver):
 class IsaacWandbAlgoObserver(AlgoObserver):
     """Log statistics from the environment along with the algorithm running stats."""
 
-    def __init__(self):
-        pass
+    def __init__(self, eval_every=1, eval_episodes=3, deterministic=True, tb_prefix="", log_step="epoch"):
+        self.eval_every = int(eval_every)
+        self.eval_episodes = int(eval_episodes)
+        self.deterministic = bool(deterministic)
+        self.tb_prefix = tb_prefix
+        self.log_step = str(log_step)
+        self.algo = None
 
+        
     def after_init(self, algo):
         self.algo = algo
         self.mean_scores = torch_ext.AverageMeter(1, self.algo.games_to_track).to(self.algo.ppo_device)
@@ -113,6 +119,10 @@ class IsaacWandbAlgoObserver(AlgoObserver):
         self.mean_scores.clear()
 
     def after_print_stats(self, frame, epoch_num, total_time):
+        if self.algo is None or self.algo.writer is None:
+            return
+        if epoch_num % self.eval_every != 0:
+            return
         # log scalars from the episode
         # if self.ep_infos:
         #     for key in self.ep_infos[0]:
