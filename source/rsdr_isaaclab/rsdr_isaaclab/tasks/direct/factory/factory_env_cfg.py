@@ -216,7 +216,7 @@ class FactoryTaskPegInsert_ADR_Cfg(FactoryTaskPegInsertCfg):
     sampler_kwargs = dict(
         boundary_prob=0.5,
         success_threshold=0.8,
-        expansion_factor=1.25, 
+        expansion_factor=2., 
         initial_dr_percentage = 0.5,
     )
 @configclass

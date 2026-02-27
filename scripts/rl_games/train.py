@@ -59,9 +59,9 @@ parser.add_argument(
 )
 parser.add_argument("--beta", type=float, default=None)
 parser.add_argument("--alpha", type=float, default=None)
-parser.add_argument("--success-threshold", type=float, default=None)
-parser.add_argument("--success-rate-condition", type=float, default=None)
-parser.add_argument("--kl-upper-bound", type=float, default=None)
+parser.add_argument("--success-threshold", type=float, default=0.5)
+parser.add_argument("--success-rate-condition", type=float, default=0.5)
+parser.add_argument("--kl-upper-bound", type=float, default=0.01)
 # append AppLauncher cli args
 AppLauncher.add_app_launcher_args(parser)
 # parse the arguments
