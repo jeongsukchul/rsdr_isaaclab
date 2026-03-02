@@ -25,8 +25,8 @@ class GMMVI(LearnableSampler):
         rng = jax.random.PRNGKey(torch.cuda.initial_seed() % (2**32))
         self.rng, init_key = jax.random.split(rng) 
         init_gmmvi_state, gmm_network = create_gmm_network_and_state(cfg.total_params, \
-                                                               batch_size, batch_size, init_key,\
-                                                               prior_scale=.1,
+                                                               batch_size, batch_size*4, init_key,\
+                                                               prior_scale=1.,
                                                                 bound_info=bound_info)
         self.gmmvi_state = init_gmmvi_state
         self.gmm_network = gmm_network
@@ -58,7 +58,8 @@ class GMMVI(LearnableSampler):
         # print("returns_jax", returns_jax.shape)
         # print("samples_jax", samples_jax.shape)
         # print("mapping_jax", mapping_jax.shape)
-        target_lnpdfs = -returns_jax * self.beta
+        print("beta in sampler gmmvi", self.beta)
+        target_lnpdfs = returns_jax * self.beta
         self.rng, update_key = jax.random.split(self.rng)
         new_sample_db_state = self.gmm_network.sample_selector.save_samples(
             self.gmmvi_state.model_state,

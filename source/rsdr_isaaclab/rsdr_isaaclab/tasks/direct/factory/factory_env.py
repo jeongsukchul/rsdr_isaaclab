@@ -798,7 +798,7 @@ class FactoryEnv(DirectRLEnv):
                 noise_hand_orn = dr_randomization._extract_param(self.sampler, master_values, "hand_init_orn_noise", self.device, default_dim=3)
 
                 above_fixed_pos[bad_envs] += noise_hand_pos[bad_envs]
-                hand_down_euler += noise_hand_orn[bad_envs]
+                hand_down_euler[bad_envs, 2] += noise_hand_orn[bad_envs,0]
 
             hand_down_quat[bad_envs, :] = torch_utils.quat_from_euler_xyz(
                 roll=hand_down_euler[:, 0], pitch=hand_down_euler[:, 1], yaw=hand_down_euler[:, 2]
@@ -874,7 +874,10 @@ class FactoryEnv(DirectRLEnv):
             held_asset_pos_noise_level = torch.tensor(self.cfg_task.held_asset_pos_noise, device=self.device)
             held_asset_pos_noise = held_asset_pos_noise @ torch.diag(held_asset_pos_noise_level)
         else:
-            held_asset_pos_noise = dr_randomization._extract_param(self.sampler, master_values, "held_pos_noise", self.device, default_dim=3)
+            held_asset_pos_noise = torch.zeros((self.num_envs,3), dtype=torch.float32, device=self.device)
+            noise_params = dr_randomization._extract_param(self.sampler, master_values, "held_pos_noise", self.device, default_dim=3)
+            held_asset_pos_noise[:, 0] = noise_params[:, 0]
+            held_asset_pos_noise[:, 2] = noise_params[:, 1]
             if self.cfg_task.name == "gear_mesh":
                 held_asset_pos_noise[:, 2] = -torch.abs(held_asset_pos_noise[:, 2])
 

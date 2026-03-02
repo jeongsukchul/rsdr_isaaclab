@@ -119,23 +119,24 @@ class FactoryRandomizationCfg:
                 # 6. Hand Init Orn Noise (3 dims)
                 # Task Config: hand_init_orn_noise = [r, p, y]
                 RandomizationParamCfg(
-                    name="hand_init_orn_noise", size=3, sampler_type="uniform",
-                    init_params= ([0.]*3),
+                    name="hand_init_orn_noise", size=1, sampler_type="uniform",
+                    init_params= ([0.]*1),
                     hard_bounds=(
-                        [-v for v in task_cfg.hand_init_orn_noise], 
-                        [v for v in task_cfg.hand_init_orn_noise]
+                        [-task_cfg.hand_init_orn_noise[2]], 
+                        [task_cfg.hand_init_orn_noise[2]],
                     ),
                     event_type="reset_noise", target_asset="robot"
                 ),
                 
                 # 7. Held Asset Pos Noise (3 dims)
                 # Task Config: held_asset_pos_noise = [x, y, z]
+                #TODO : NutThread 의 경우 다르게
                 RandomizationParamCfg(
-                    name="held_pos_noise", size=3, sampler_type="uniform",
-                    init_params=([0.]*3), 
+                    name="held_pos_noise", size=2, sampler_type="uniform",
+                    init_params=([0.]*2), 
                     hard_bounds=(
-                        [-v for v in task_cfg.held_asset_pos_noise], 
-                        [v for v in task_cfg.held_asset_pos_noise]
+                        [-task_cfg.held_asset_pos_noise[0], -task_cfg.held_asset_pos_noise[2]], 
+                        [task_cfg.held_asset_pos_noise[0], task_cfg.held_asset_pos_noise[2]], 
                     ),
                     event_type="reset_noise", target_asset="held_asset"
                 ),
