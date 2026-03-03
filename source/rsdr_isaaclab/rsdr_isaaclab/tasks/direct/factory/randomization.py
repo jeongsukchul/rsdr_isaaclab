@@ -103,7 +103,7 @@ def apply_learned_randomization(env, env_ids=None):
             sample_fn = env.sampler.get_train_sample_fn()
             master_values, mapping = sample_fn(env.num_envs)
             master_values = master_values.to(device=env.dr_context.device, dtype=env.dr_context.dtype)
-            mapping = mapping.to(device=env.dr_context.device, dtype=env.dr_context.dtype)
+            mapping = mapping.to(device=env.dr_context.device, dtype=torch.int32)
             env.mapping  = mapping
         else:
             sample_fn = env.sampler.get_train_sample_fn()

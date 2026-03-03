@@ -1,9 +1,16 @@
 from .gmmvi.network import GMMTrainingState, create_gmm_network_and_state
 from .sampler import LearnableSampler
-import os
 import jax
 import jax.numpy as jnp
 import torch
+import logging
+
+# Silence JAX debug logs
+logging.getLogger("jax").setLevel(logging.WARNING)
+logging.getLogger("jax._src").setLevel(logging.WARNING)
+
+# (optional) if you configured root logging to DEBUG somewhere:
+logging.basicConfig(level=logging.INFO)  # or WARNING
 def jax_to_torch(x):
     """JAX array -> Torch tensor (zero-copy via DLPack when possible)."""
     return torch.utils.dlpack.from_dlpack(jax.dlpack.to_dlpack(x))
@@ -25,14 +32,13 @@ class GMMVI(LearnableSampler):
         rng = jax.random.PRNGKey(torch.cuda.initial_seed() % (2**32))
         self.rng, init_key = jax.random.split(rng) 
         init_gmmvi_state, gmm_network = create_gmm_network_and_state(cfg.total_params, \
-                                                               batch_size, batch_size*4, init_key,\
-                                                               prior_scale=1.,
+                                                               batch_size, batch_size, init_key,\
                                                                 bound_info=bound_info)
         self.gmmvi_state = init_gmmvi_state
         self.gmm_network = gmm_network
         self.update_fn = jax.jit(make_gmm_update(gmm_network))
         self.sample_size = batch_size
-        self.beta = beta
+        self.beta = float(beta)
         self.current_dist= None
     def get_train_sample_fn(self):
         return lambda num_samples: self.sample(num_samples)
@@ -52,13 +58,15 @@ class GMMVI(LearnableSampler):
         return jax_to_torch(lp_jax).to(device=value.device)
     def update(self, samples_torch, mapping_torch, returns):
 
-        returns_jax  = torch_to_jax(returns)
-        samples_jax  = torch_to_jax(samples_torch)
-        mapping_jax  = torch_to_jax(mapping_torch)
+        returns = returns.reshape(-1).to(device=samples_torch.device, dtype=torch.float32)
+        mapping_torch = mapping_torch.reshape(-1).to(device=samples_torch.device, dtype=torch.int32)
+
+        returns_jax = torch_to_jax(returns)
+        samples_jax = torch_to_jax(samples_torch)
+        mapping_jax = torch_to_jax(mapping_torch).astype(jnp.int32)
         # print("returns_jax", returns_jax.shape)
         # print("samples_jax", samples_jax.shape)
         # print("mapping_jax", mapping_jax.shape)
-        print("beta in sampler gmmvi", self.beta)
         target_lnpdfs = returns_jax * self.beta
         self.rng, update_key = jax.random.split(self.rng)
         new_sample_db_state = self.gmm_network.sample_selector.save_samples(

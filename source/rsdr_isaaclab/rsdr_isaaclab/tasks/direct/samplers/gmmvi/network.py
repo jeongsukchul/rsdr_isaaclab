@@ -47,10 +47,14 @@ def create_gmm_network_and_state(
     num_envs : int,
     batch_size : int,
     key : jax.random.PRNGKey,
-    prior_mean : float = 0.,
-    prior_scale : float = .3,
+    prior_mean : float | None = None,
+    prior_scale : float | None = None,
     bound_info : dict = None,
 ):  
+    if prior_mean is None:
+        prior_mean = float(cfg.prior_mean)
+    if prior_scale is None:
+        prior_scale = float(cfg.prior_scale)
     
     gmm = setup_full_cov_gmm(dim, cfg.max_components, bound_info)
     

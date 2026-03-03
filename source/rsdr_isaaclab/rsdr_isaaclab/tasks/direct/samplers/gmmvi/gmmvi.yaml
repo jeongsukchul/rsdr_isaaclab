@@ -1,7 +1,7 @@
 #config for target
 prior_mean: 0.
-prior_scale : 20.
-init_std :  20.
+prior_scale : .1
+init_std :  .1
 dim: 2
 #general config
 initial_stepsize: 1.0 # component stepsize and weight step size

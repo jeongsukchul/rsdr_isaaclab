@@ -92,7 +92,7 @@ class FactoryEnv(DirectRLEnv):
         self.ep_success_times = torch.zeros((self.num_envs,), dtype=torch.long, device=self.device)
         self.ep_return = torch.zeros((self.num_envs,), dtype=torch.float32, device=self.device)
         self.dr_context = torch.zeros((self.num_envs, self.sampler.num_params), dtype=torch.float32, device=self.device)
-        self.mapping = torch.zeros((self.num_envs, self.sampler.num_params), dtype=torch.float32, device=self.device)
+        self.mapping = torch.zeros((self.num_envs,), dtype=torch.int32, device=self.device)
     def _setup_scene(self):
         """Initialize simulation scene."""
         spawn_ground_plane(prim_path="/World/ground", cfg=GroundPlaneCfg(), translation=(0.0, 0.0, -1.05))
