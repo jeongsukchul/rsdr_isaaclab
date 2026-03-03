@@ -120,7 +120,7 @@ class PegInsert(FactoryTask):
     fixed_asset_init_orn_range_deg: float = 360.0
 
     # Held Asset (applies to all tasks)
-    held_asset_pos_noise: list = [0.003, 0.0, 0.003]  # noise level of the held asset in gripper
+    held_asset_pos_noise: list = [0.03, 0., 0.03] #[0.003, 0.0, 0.003]  # noise level of the held asset in gripper
     held_asset_rot_init: float = 0.0
 
     # Rewards

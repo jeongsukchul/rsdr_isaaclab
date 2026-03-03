@@ -52,10 +52,21 @@ class GMMVI(LearnableSampler):
         # mapping might be int/bool; keep dtype
         mapping_torch = jax_to_torch(mapping_jax).to(device=self.device)
         return samples_torch, mapping_torch
+    def sample_contexts(self, num_samples: int) -> torch.Tensor:
+        samples, _ = self.sample(num_samples)
+        return samples
     def log_prob(self, value: torch.Tensor) -> torch.Tensor:
         value_jax = torch_to_jax(value.to("cuda" if value.is_cuda else "cpu"))
         lp_jax = self.gmm_network.model.log_density(self.gmmvi_state.model_state.gmm_state, value_jax)
         return jax_to_torch(lp_jax).to(device=value.device)
+    def log_prob_batch(self, values: torch.Tensor) -> torch.Tensor:
+        """Batched log-density helper for diagnostics."""
+        values = values.to(device=self.device, dtype=torch.float32)
+        values_jax = torch_to_jax(values)
+        lp_jax = jax.vmap(self.gmm_network.model.log_density, in_axes=(None, 0))(
+            self.gmmvi_state.model_state.gmm_state, values_jax
+        )
+        return jax_to_torch(lp_jax).to(device=values.device, dtype=torch.float32)
     def update(self, samples_torch, mapping_torch, returns):
 
         returns = returns.reshape(-1).to(device=samples_torch.device, dtype=torch.float32)

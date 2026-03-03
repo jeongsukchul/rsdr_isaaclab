@@ -49,6 +49,8 @@ def _broadcast_multiplier(vals: torch.Tensor, target_width: int) -> torch.Tensor
 
 
 def randomize_actuator_gain(env, vals):
+    if vals is None:
+        return
     """Multiply default joint stiffness/damping by per-env multipliers."""
     env.default_gains = torch.tensor(env.cfg.ctrl.default_task_prop_gains, device=env.device).repeat(
             (env.num_envs, 1)

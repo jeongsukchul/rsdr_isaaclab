@@ -27,6 +27,7 @@ class RandomizationParamCfg:
 class FactoryRandomizationCfg:
     params: List[RandomizationParamCfg] = field(default_factory=list)
     total_params: int = 0
+    only_held_pos_noise_2d: bool = True
     # [NEW] Pass the Task Config Class here (e.g. PegInsert) to inherit defaults
     task_class: Type[FactoryTask] = PegInsert 
 
@@ -169,6 +170,8 @@ class FactoryRandomizationCfg:
                     event_type="ema", target_asset="robot"
                 ),
             ]
+        if self.only_held_pos_noise_2d:
+            self.params = [p for p in self.params if p.name == "held_pos_noise"]
 
         # AUTO-INDEXING LOGIC
         current_idx = 0

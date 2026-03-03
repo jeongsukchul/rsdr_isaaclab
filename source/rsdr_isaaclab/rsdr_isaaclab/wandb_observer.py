@@ -2,6 +2,11 @@ from rl_games.algos_torch import torch_ext
 import torch
 import numpy as np
 import wandb
+from rsdr_isaaclab.tasks.direct.samplers.sampler import (
+    UDR,
+    render_held_pos_noise_2d_compare_image,
+    render_held_pos_noise_2d_image,
+)
 
 
 class AlgoObserver:
@@ -90,6 +95,10 @@ class IsaacWandbAlgoObserver(AlgoObserver):
         self.tb_prefix = tb_prefix
         self.log_step = str(log_step)
         self.algo = None
+        self.grid_n = 64
+        self.vis_num_samples = 2048
+        self._udr_ref_sampler = None
+        self._logged_initial_sampler_viz = False
 
         
     def after_init(self, algo):
@@ -121,6 +130,7 @@ class IsaacWandbAlgoObserver(AlgoObserver):
     def after_print_stats(self, frame, epoch_num, total_time):
         if self.algo is None or self.algo.writer is None:
             return
+        self._maybe_log_initial_sampler_2d_viz(step=int(frame))
         if epoch_num % self.eval_every != 0:
             return
         # log scalars from the episode
@@ -148,6 +158,8 @@ class IsaacWandbAlgoObserver(AlgoObserver):
             # self.writer.add_scalar(f"{k}/iter", v, epoch_num)
             # self.writer.add_scalar(f"{k}/time", v, total_time)
         wandb.log({"train/frame": frame, "train/epoch": epoch_num}, step=int(frame))
+
+        self._log_sampler_2d_viz(step=int(frame))
         
         # log mean reward/score from the env
         # if self.mean_scores.current_size > 0:
@@ -155,3 +167,69 @@ class IsaacWandbAlgoObserver(AlgoObserver):
         #     self.writer.add_scalar("scores/mean", mean_scores, frame)
         #     self.writer.add_scalar("scores/iter", mean_scores, epoch_num)
         #     self.writer.add_scalar("scores/time", mean_scores, total_time)
+
+    def _get_factory_env(self):
+        v = self.algo.vec_env
+        base = getattr(v, "env", None) or getattr(v, "_env", None) or v
+        return getattr(base, "unwrapped", None)
+
+    def _get_udr_ref(self, sampler):
+        if self._udr_ref_sampler is None:
+            self._udr_ref_sampler = UDR(sampler.cfg, sampler.device)
+            return self._udr_ref_sampler
+        if self._udr_ref_sampler.num_params != sampler.num_params:
+            self._udr_ref_sampler = UDR(sampler.cfg, sampler.device)
+            return self._udr_ref_sampler
+        if not torch.allclose(self._udr_ref_sampler.low, sampler.low) or not torch.allclose(
+            self._udr_ref_sampler.high, sampler.high
+        ):
+            self._udr_ref_sampler = UDR(sampler.cfg, sampler.device)
+        return self._udr_ref_sampler
+
+    def _log_sampler_2d_viz(self, step: int):
+        if wandb.run is None:
+            return
+        env = self._get_factory_env()
+        if env is None:
+            return
+        sampler = getattr(env, "sampler", None)
+        if sampler is None:
+            return
+        extras = dict(getattr(env, "extras", {}))
+        contexts = extras.get("dr_samples", None)
+        if contexts is not None and torch.is_tensor(contexts) and contexts.ndim == 2:
+            num_vis = min(self.vis_num_samples, contexts.shape[0])
+            sampled_contexts = contexts[:num_vis].detach().to(device=sampler.device, dtype=torch.float32)
+        else:
+            sampled_contexts = sampler.sample_contexts(self.vis_num_samples).detach().to(
+                device=sampler.device, dtype=torch.float32
+            )
+            num_vis = sampled_contexts.shape[0]
+        image = render_held_pos_noise_2d_image(
+            sampler=sampler,
+            sampled_contexts=sampled_contexts,
+            prefix=sampler.name,
+            grid_n=max(16, self.grid_n),
+        )
+        if image is not None:
+            wandb.log({f"viz/{sampler.name}/held_pos_noise_2d": wandb.Image(image)}, step=step)
+
+        udr_sampler = self._get_udr_ref(sampler)
+        udr_contexts = udr_sampler.sample_contexts(num_vis).detach().to(device=sampler.device, dtype=torch.float32)
+        cmp_image = render_held_pos_noise_2d_compare_image(
+            sampler_a=sampler,
+            sampler_b=udr_sampler,
+            sampled_contexts_a=sampled_contexts,
+            sampled_contexts_b=udr_contexts,
+            label_a=sampler.name,
+            label_b="UDR",
+            grid_n=max(16, self.grid_n),
+        )
+        if cmp_image is not None:
+            wandb.log({"viz/held_pos_noise_2d_udr_vs_current": wandb.Image(cmp_image)}, step=step)
+
+    def _maybe_log_initial_sampler_2d_viz(self, step: int):
+        if self._logged_initial_sampler_viz:
+            return
+        self._log_sampler_2d_viz(step=step)
+        self._logged_initial_sampler_viz = True

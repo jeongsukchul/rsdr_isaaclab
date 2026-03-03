@@ -3,8 +3,212 @@ import torch.nn as nn
 import torch.distributions as D
 from .distributions import UniformDist, BetasDist, BoundarySamplingDist, NormFlowDist, MultivariateNormalDist
 import numpy as np
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 from scipy.optimize import LinearConstraint, NonlinearConstraint, minimize, Bounds
 import time
+
+
+def _held_pos_noise_indices_2d(sampler):
+    idx = None
+    for p_cfg in sampler.cfg.params:
+        if p_cfg.name == "held_pos_noise":
+            local = list(p_cfg.indices)
+            # Accept >=2 dims and always project to 2D for visualization.
+            # Prefer x-z style when available: [0, 2], else [0, 1].
+            if len(local) >= 3:
+                idx = [local[0], local[2]]
+            elif len(local) == 2:
+                idx = local
+            else:
+                idx = None
+            break
+    if idx is None:
+        return None
+    return idx
+
+
+def _build_grid_query(sampler, idx, device, grid_n):
+    grid_n = max(16, int(grid_n))
+    low_xy = sampler.low[idx].detach().to(device=device, dtype=torch.float32)
+    high_xy = sampler.high[idx].detach().to(device=device, dtype=torch.float32)
+    xs = torch.linspace(low_xy[0], high_xy[0], grid_n, device=device)
+    ys = torch.linspace(low_xy[1], high_xy[1], grid_n, device=device)
+    xx, yy = torch.meshgrid(xs, ys, indexing="xy")
+    xy = torch.stack((xx.reshape(-1), yy.reshape(-1)), dim=-1)
+    # Use midpoint conditioning for non-plotted dimensions.
+    query = sampler.mid.unsqueeze(0).repeat(xy.shape[0], 1).to(device=device, dtype=torch.float32)
+    query[:, idx] = xy
+    return query, low_xy, high_xy, grid_n
+
+
+def _eval_log_prob_grid(sampler, query, grid_n):
+    with torch.no_grad():
+        logp = sampler.log_prob_batch(query) if hasattr(sampler, "log_prob_batch") else sampler.log_prob(query)
+    logp_np = logp.reshape(int(grid_n), int(grid_n)).detach().cpu().numpy()
+    return np.where(np.isfinite(logp_np), logp_np, np.nan)
+
+
+def _scatter_xy(sampled_contexts, idx):
+    return sampled_contexts[:, idx].detach().cpu().numpy()
+
+
+def render_held_pos_noise_2d_image(sampler, sampled_contexts: torch.Tensor, prefix: str = "train", grid_n: int = 64):
+    """Create [log-prob heatmap + sampled x,y scatter] for held_pos_noise (2D)."""
+    idx = _held_pos_noise_indices_2d(sampler)
+    if idx is None:
+        return None
+
+    device = sampled_contexts.device
+    query, low_xy, high_xy, grid_n = _build_grid_query(sampler, idx, device, grid_n)
+    logp_np = _eval_log_prob_grid(sampler, query, grid_n)
+    sampled_xy = _scatter_xy(sampled_contexts, idx)
+    low_xy_np = low_xy.detach().cpu().numpy()
+    high_xy_np = high_xy.detach().cpu().numpy()
+    lp_span = float(np.nanmax(logp_np) - np.nanmin(logp_np)) if np.isfinite(logp_np).any() else float("nan")
+    prob_np = np.exp(logp_np)
+
+    fig, axes = plt.subplots(1, 3, figsize=(13.8, 4.0), dpi=120)
+    im = axes[0].imshow(
+        logp_np.T,
+        origin="lower",
+        extent=(low_xy_np[0], high_xy_np[0], low_xy_np[1], high_xy_np[1]),
+        aspect="auto",
+        cmap="viridis",
+    )
+    axes[0].set_title(f"{prefix} log_prob heatmap (n={grid_n}, span={lp_span:.3g})")
+    axes[0].set_xlabel("held_pos_noise x")
+    axes[0].set_ylabel("held_pos_noise y")
+    fig.colorbar(im, ax=axes[0], fraction=0.046, pad=0.04)
+
+    im_prob = axes[1].imshow(
+        prob_np.T,
+        origin="lower",
+        extent=(low_xy_np[0], high_xy_np[0], low_xy_np[1], high_xy_np[1]),
+        aspect="auto",
+        cmap="magma",
+    )
+    axes[1].set_title(f"{prefix} prob heatmap")
+    axes[1].set_xlabel("held_pos_noise x")
+    axes[1].set_ylabel("held_pos_noise y")
+    fig.colorbar(im_prob, ax=axes[1], fraction=0.046, pad=0.04)
+
+    axes[2].scatter(sampled_xy[:, 0], sampled_xy[:, 1], s=8, alpha=0.65, c="#1f77b4")
+    axes[2].set_xlim(low_xy_np[0], high_xy_np[0])
+    axes[2].set_ylim(low_xy_np[1], high_xy_np[1])
+    axes[2].set_title(f"{prefix} sampled x,y")
+    axes[2].set_xlabel("held_pos_noise x")
+    axes[2].set_ylabel("held_pos_noise y")
+    fig.suptitle(f"{sampler.name} 2D held_pos_noise")
+    fig.tight_layout()
+
+    fig.canvas.draw()
+    image = np.asarray(fig.canvas.buffer_rgba(), dtype=np.uint8)[..., :3].copy()
+    plt.close(fig)
+    return image
+
+
+def render_held_pos_noise_2d_compare_image(
+    sampler_a,
+    sampler_b,
+    sampled_contexts_a: torch.Tensor,
+    sampled_contexts_b: torch.Tensor,
+    label_a: str = "A",
+    label_b: str = "B",
+    grid_n: int = 64,
+):
+    """Create [A/B log-prob heatmaps + A/B sampled x,y] comparison for held_pos_noise (2D)."""
+    idx = _held_pos_noise_indices_2d(sampler_a)
+    if idx is None:
+        return None
+
+    device = sampled_contexts_a.device
+    query, low_xy, high_xy, grid_n = _build_grid_query(sampler_a, idx, device, grid_n)
+    logp_a_np = _eval_log_prob_grid(sampler_a, query, grid_n)
+    logp_b_np = _eval_log_prob_grid(sampler_b, query, grid_n)
+    sampled_xy_a = _scatter_xy(sampled_contexts_a, idx)
+    sampled_xy_b = _scatter_xy(sampled_contexts_b, idx)
+    low_xy_np = low_xy.detach().cpu().numpy()
+    high_xy_np = high_xy.detach().cpu().numpy()
+    prob_a_np = np.exp(logp_a_np)
+    prob_b_np = np.exp(logp_b_np)
+
+    fig, axes = plt.subplots(2, 3, figsize=(14.0, 8.0), dpi=120)
+
+    im_a = axes[0, 0].imshow(
+        logp_a_np.T,
+        origin="lower",
+        extent=(low_xy_np[0], high_xy_np[0], low_xy_np[1], high_xy_np[1]),
+        aspect="auto",
+        cmap="viridis",
+    )
+    axes[0, 0].set_title(f"{label_a} log_prob heatmap")
+    axes[0, 0].set_xlabel("held_pos_noise x")
+    axes[0, 0].set_ylabel("held_pos_noise y")
+    fig.colorbar(im_a, ax=axes[0, 0], fraction=0.046, pad=0.04)
+
+    im_pa = axes[0, 1].imshow(
+        prob_a_np.T,
+        origin="lower",
+        extent=(low_xy_np[0], high_xy_np[0], low_xy_np[1], high_xy_np[1]),
+        aspect="auto",
+        cmap="magma",
+    )
+    axes[0, 1].set_title(f"{label_a} prob heatmap")
+    axes[0, 1].set_xlabel("held_pos_noise x")
+    axes[0, 1].set_ylabel("held_pos_noise y")
+    fig.colorbar(im_pa, ax=axes[0, 1], fraction=0.046, pad=0.04)
+
+    im_b = axes[0, 2].imshow(
+        logp_b_np.T,
+        origin="lower",
+        extent=(low_xy_np[0], high_xy_np[0], low_xy_np[1], high_xy_np[1]),
+        aspect="auto",
+        cmap="viridis",
+    )
+    axes[0, 2].set_title(f"{label_b} log_prob heatmap")
+    axes[0, 2].set_xlabel("held_pos_noise x")
+    axes[0, 2].set_ylabel("held_pos_noise y")
+    fig.colorbar(im_b, ax=axes[0, 2], fraction=0.046, pad=0.04)
+
+    im_pb = axes[1, 0].imshow(
+        prob_b_np.T,
+        origin="lower",
+        extent=(low_xy_np[0], high_xy_np[0], low_xy_np[1], high_xy_np[1]),
+        aspect="auto",
+        cmap="magma",
+    )
+    axes[1, 0].set_title(f"{label_b} prob heatmap")
+    axes[1, 0].set_xlabel("held_pos_noise x")
+    axes[1, 0].set_ylabel("held_pos_noise y")
+    fig.colorbar(im_pb, ax=axes[1, 0], fraction=0.046, pad=0.04)
+
+    axes[1, 1].scatter(sampled_xy_a[:, 0], sampled_xy_a[:, 1], s=8, alpha=0.65, c="#1f77b4")
+    axes[1, 1].set_xlim(low_xy_np[0], high_xy_np[0])
+    axes[1, 1].set_ylim(low_xy_np[1], high_xy_np[1])
+    axes[1, 1].set_title(f"{label_a} sampled x,y")
+    axes[1, 1].set_xlabel("held_pos_noise x")
+    axes[1, 1].set_ylabel("held_pos_noise y")
+
+    axes[1, 2].scatter(sampled_xy_b[:, 0], sampled_xy_b[:, 1], s=8, alpha=0.65, c="#ff7f0e")
+    axes[1, 2].set_xlim(low_xy_np[0], high_xy_np[0])
+    axes[1, 2].set_ylim(low_xy_np[1], high_xy_np[1])
+    axes[1, 2].set_title(f"{label_b} sampled x,y")
+    axes[1, 2].set_xlabel("held_pos_noise x")
+    axes[1, 2].set_ylabel("held_pos_noise y")
+
+    axes[1, 0].set_xlim(low_xy_np[0], high_xy_np[0])
+    axes[1, 0].set_xlim(low_xy_np[0], high_xy_np[0])
+    axes[1, 0].set_ylim(low_xy_np[1], high_xy_np[1])
+
+    fig.suptitle("2D held_pos_noise: UDR vs GMMVI")
+    fig.tight_layout()
+
+    fig.canvas.draw()
+    image = np.asarray(fig.canvas.buffer_rgba(), dtype=np.uint8)[..., :3].copy()
+    plt.close(fig)
+    return image
 class LearnableSampler:
     def __init__(self, cfg, device: str):
         super().__init__()
@@ -48,6 +252,10 @@ class LearnableSampler:
     def log_prob(self, value: torch.Tensor) -> torch.Tensor:
     
         return self.current_dist.log_prob(value)
+    def log_prob_batch(self, values: torch.Tensor) -> torch.Tensor:
+        return self.log_prob(values)
+    def sample_contexts(self, num_samples: int) -> torch.Tensor:
+        return self.sample(num_samples)
     def volume(self, low, high):
         diff = high - low
         diff_safe = torch.where(diff < 1e-6, torch.ones_like(diff), diff)
@@ -405,175 +613,8 @@ class DORAEMON(LearnableSampler):
                 proposed_distr = BetasDist.from_flat(x, self.low, self.high)
                 
                 log_prob_proposed = proposed_distr.log_prob(contexts)
-                log_prob_current = self.current_dist.log_prob(contexts)
-                
-                importance_sampling = torch.exp(log_prob_proposed - log_prob_current)
-                
-                if torch.any(torch.isnan(importance_sampling)) or torch.any(torch.isinf(importance_sampling)):
-                    print("Warning: NaN or Inf in importance sampling (prime)")
-                    importance_sampling = torch.nan_to_num(importance_sampling, nan=1.0, posinf=1.0, neginf=1.0)
-                
-                perf_values = torch.tensor(returns.detach() >= self.success_threshold, dtype=torch.float64)
-                performance = torch.mean(importance_sampling * perf_values)
-                
-                if torch.isnan(performance) or torch.isinf(performance):
-                    print("Warning: NaN or Inf in performance (prime)")
-                    return np.zeros_like(x_opt.detach().cpu().numpy())
+                log_prob_current = self.current
 
-                grads = torch.autograd.grad(performance, x_opt)
-                grad_np = np.concatenate([g.detach().cpu().numpy() for g in grads])
-                
-                if np.any(np.isnan(grad_np)) or np.any(np.isinf(grad_np)):
-                    print("Warning: NaN or Inf in gradients")
-                    grad_np = np.nan_to_num(grad_np, nan=0.0, posinf=0.0, neginf=0.0)
-                
-                return grad_np
-
-        constraints.append(
-            NonlinearConstraint(
-                fun=performance_constraint_fn,
-                lb=self.success_rate_condition-1e-4,  # scipy would still complain if x0 is very close to the boundary
-                ub=np.inf,
-                jac=performance_constraint_fn_prime,
-                keep_feasible=self.hard_performance_constraint
-            )
-        )
-
-
-
-        def objective_fn(x_opt):
-            """Minimize KL-divergence between the current and the target distribution,
-                s.t. previously defined constraints."""
-            with torch.enable_grad():
-                x_opt = torch.tensor(x_opt, requires_grad=True, dtype=torch.float64)
-                x = self._sigmoid(x_opt, self.min_bound, self.max_bound)
-                proposed_distr = BetasDist.from_flat(x, self.low, self.high)
-                kl_divergence = proposed_distr.kl_divergence(self.target_dist)
-                
-                if not torch.isfinite(kl_divergence):
-                    print(f"Warning: Non-finite KL divergence detected: {kl_divergence}")
-                    return float('inf'), np.zeros_like(x_opt.detach().cpu().numpy())
-                
-                grads = torch.autograd.grad(kl_divergence, x_opt, create_graph=True)
-                grad_np = np.concatenate([g.detach().cpu().numpy() for g in grads])
-                
-                if not np.isfinite(grad_np).all():
-                    print(f"Warning: Non-finite gradient detected: {grad_np}")
-                    return float('inf'), np.zeros_like(x_opt.detach().cpu().numpy())
-                return kl_divergence.detach().cpu().numpy(), grad_np
-
-
-        x0 = self.current_dist.to_flat()
-        x0_opt = self._inv_sigmoid(x0, self.min_bound, self.max_bound)
-        
-        """
-            Skip DORAEMON optimization at the beginning until performance_lower_bound is reached 
-        """
-        if self.train_until_performance_lb and not self.train_until_done:
-            if performance_constraint_fn(x0_opt) < self.success_rate_condition:
-                # Skip DORAEMON update
-                print(f'--- DORAEMON iter {self.current_iter} skipped as performance lower bound has not been reached yet. Mean reward {performance_constraint_fn(x0_opt)} < {self.success_rate_condition}')
-                return
-            else:
-                # Skip iterations only once, until you reach it the first time
-                self.train_until_done = True
-                self.n_iter_skipped = 0
-
-
-        """
-            Start from a feasible distribution within the trust region Kl(p||.) < eps
-        """
-        if performance_constraint_fn(x0_opt) < self.success_rate_condition:
-            # Performance constraint not satisfied. Find a different initial distribution within the current trust region
-            max_perf_x0_opt, curr_step_kl, success = self.get_feasible_starting_distr(x0_opt=x0_opt,
-                                                                                        obj_fn=performance_constraint_fn,
-                                                                                        obj_fn_prime=performance_constraint_fn_prime,
-                                                                                        kl_constraint_fn=kl_constraint_fn,
-                                                                                        kl_constraint_fn_prime=kl_constraint_fn_prime)
-            if success:
-                if performance_constraint_fn(max_perf_x0_opt) >= self.success_rate_condition:
-                    # Feasible distribution found, Go on with this new starting distribution
-                    x0_opt = max_perf_x0_opt
-                    x0 = self._sigmoid(x0_opt, self.min_bound, self.max_bound)
-
-                else:
-                    # No feasible distribution within the trust region has been found
-                    # Keep training with the max performance distribution within the trust region
-                    new_x = self._sigmoid(max_perf_x0_opt, self.min_bound, self.max_bound)
-                    self.current_dist = BetasDist.from_flat(new_x, self.low, self.high)
-                    print(f'No distribution within the trust region satisfies the performance_constraint. ' \
-                            f'Keep training with the max performant distribution in the trust region: {new_x.detach().numpy()} ' \
-                            f'Est reward constraint value: {performance_constraint_fn(max_perf_x0_opt)} < {self.success_rate_condition}')
-                    return
-
-            else:
-                # Inverse opt. problem had an unexpected error
-                print('Warning! inverted optimization problem NOT successful.')
-        
-        print("Starting optimization...")
-        
-        try:
-            result = minimize(
-                objective_fn,
-                x0_opt,
-                method="trust-constr",
-                jac=True,
-                constraints=constraints,
-                options={"gtol": 1e-4, "xtol": 1e-6, 'maxiter': 100},
-            )
-
-            print(f"Optimization result: {result}")
-            new_x_opt = result.x
-            
-            # Check validity of new optimum found
-            if not result.success:
-                print('Warning! optimization NOT successful.')
-                
-                # If optimization process was not a success
-                old_f = objective_fn(x0_opt)[0]
-                constraints_satisfied = [const.lb <= const.fun(result.x) <= const.ub for const in constraints]
-
-                if not (all(constraints_satisfied) and result.fun < old_f):  # keep old parameters if update was unsuccessful
-                    print(f"Warning! Update effectively unsuccessful, keeping old values parameters.")
-                    new_x_opt = x0_opt
-
-            new_x = self._sigmoid(new_x_opt, self.min_bound, self.max_bound)
-            self.current_dist = BetasDist.from_flat(new_x, self.low, self.high)
-            print(f"New distribution parameters: {new_x}")
-            
-
-        except Exception as e:
-            print(f"Optimization failed: {str(e)}")
-            print("Keeping current distribution")
-    
-        print("DORAEMON current entropy", self.entropy())
-        print("Reference distribution entropy", self.target_dist.entropy().sum().item())
-    def _sigmoid(self, x, lb=0.0, up=1.0):
-        # Preserve autograd if x is already a tensor
-        if torch.is_tensor(x):
-            xt = x
-        else:
-            xt = torch.as_tensor(x, dtype=torch.float64, device=self.low.device)
-
-        lb = torch.as_tensor(lb, dtype=xt.dtype, device=xt.device)
-        up = torch.as_tensor(up, dtype=xt.dtype, device=xt.device)
-        return (up - lb) / (1 + torch.exp(-xt)) + lb
-
-
-    def _inv_sigmoid(self, x, lb=0.0, up=1.0):
-        if torch.is_tensor(x):
-            xt = x
-        else:
-            xt = torch.as_tensor(x, dtype=torch.float64, device=self.low.device)
-
-        lb = torch.as_tensor(lb, dtype=xt.dtype, device=xt.device)
-        up = torch.as_tensor(up, dtype=xt.dtype, device=xt.device)
-
-        eps = 1e-12
-        xt = xt.clamp(lb + eps, up - eps)
-        return -torch.log((up - lb) / (xt - lb) - 1)
-
-        
 class GOFLOW(LearnableSampler):
     def __init__(self,  cfg, device: str,
                  num_training_iters=None, alpha=None, beta=None, max_loss=1e6, **kwargs):
