@@ -52,13 +52,29 @@ class GMMVI(LearnableSampler):
         return lambda num_samples: self.sample(num_samples)
     def sample(self, num_samples: int) -> torch.Tensor:
         self.rng, key = jax.random.split(self.rng)
-        samples_jax, mapping_jax = self.gmm_network.model.sample(
-            self.gmmvi_state.model_state.gmm_state, key, num_samples
+        # Use sample selector path for rollout stability/consistency.
+        samples_jax, mapping_jax = self.gmm_network.sample_selector.select_samples(
+            self.gmmvi_state.model_state,
+            key,
         )
+        n_sel = int(samples_jax.shape[0])
+        if n_sel > num_samples:
+            samples_jax = samples_jax[:num_samples]
+            mapping_jax = mapping_jax[:num_samples]
+        elif n_sel < num_samples:
+            deficit = num_samples - n_sel
+            self.rng, key_pad = jax.random.split(self.rng)
+            pad_samples, pad_mapping = self.gmm_network.model.sample(
+                self.gmmvi_state.model_state.gmm_state,
+                key_pad,
+                deficit,
+            )
+            samples_jax = jnp.concatenate([samples_jax, pad_samples], axis=0)
+            mapping_jax = jnp.concatenate([mapping_jax, pad_mapping.astype(jnp.int32)], axis=0)
 
         samples_torch = jax_to_torch(samples_jax).to(device=self.device, dtype=torch.float32)
         # mapping might be int/bool; keep dtype
-        mapping_torch = jax_to_torch(mapping_jax).to(device=self.device)
+        mapping_torch = jax_to_torch(mapping_jax).to(device=self.device, dtype=torch.int32)
         return samples_torch, mapping_torch
     def sample_contexts(self, num_samples: int) -> torch.Tensor:
         samples, _ = self.sample(num_samples)
