@@ -55,21 +55,22 @@ def setup_sampledb(
     def add_samples(sampledb_state: SampleDBState, new_samples, new_means, new_chols, new_target_lnpdfs,
                     new_target_grads, new_mapping):
         num_samples_written = sampledb_state.num_samples_written + jnp.shape(new_samples)[0]
+        n_new = jnp.shape(new_samples)[0]
 
-        finite_mask = jnp.isfinite(new_target_lnpdfs)  # [SAMPLE_SIZE]
-        finite_mask_exp = finite_mask[:, None]         # [SAMPLE_SIZE, 1]
+        finite_mask = jnp.isfinite(new_target_lnpdfs)  # [n_new]
+        finite_mask_exp = finite_mask[:, None]         # [n_new, 1]
 
         if KEEP_SAMPLES:
             # Roll the buffer and then selectively overwrite only finite rows in the front window.
-            front_samples_prev = sampledb_state.samples[:SAMPLE_SIZE]
-            front_lnpdfs_prev = sampledb_state.target_lnpdfs[:SAMPLE_SIZE]
-            front_grads_prev = sampledb_state.target_grads[:SAMPLE_SIZE]
-            front_mapping_prev = sampledb_state.mapping[:SAMPLE_SIZE]
+            front_samples_prev = sampledb_state.samples[:n_new]
+            front_lnpdfs_prev = sampledb_state.target_lnpdfs[:n_new]
+            front_grads_prev = sampledb_state.target_grads[:n_new]
+            front_mapping_prev = sampledb_state.mapping[:n_new]
 
-            samples = jnp.roll(sampledb_state.samples, SAMPLE_SIZE, axis=0)
-            target_lnpdfs = jnp.roll(sampledb_state.target_lnpdfs, SAMPLE_SIZE, axis=0)
-            target_grads = jnp.roll(sampledb_state.target_grads, SAMPLE_SIZE, axis=0)
-            mapping = jnp.roll(sampledb_state.mapping, SAMPLE_SIZE, axis=0)
+            samples = jnp.roll(sampledb_state.samples, n_new, axis=0)
+            target_lnpdfs = jnp.roll(sampledb_state.target_lnpdfs, n_new, axis=0)
+            target_grads = jnp.roll(sampledb_state.target_grads, n_new, axis=0)
+            mapping = jnp.roll(sampledb_state.mapping, n_new, axis=0)
 
 
             # Keep previous row when not finite.
@@ -78,35 +79,35 @@ def setup_sampledb(
             front_grads = jnp.where(finite_mask_exp, new_target_grads, front_grads_prev)
             front_mapping = jnp.where(finite_mask, new_mapping, front_mapping_prev)
 
-            samples = samples.at[:SAMPLE_SIZE].set(front_samples)
-            target_lnpdfs = target_lnpdfs.at[:SAMPLE_SIZE].set(front_lnpdfs)
-            target_grads = target_grads.at[:SAMPLE_SIZE].set(front_grads)
-            mapping = mapping.at[:SAMPLE_SIZE].set(front_mapping)
+            samples = samples.at[:n_new].set(front_samples)
+            target_lnpdfs = target_lnpdfs.at[:n_new].set(front_lnpdfs)
+            target_grads = target_grads.at[:n_new].set(front_grads)
+            mapping = mapping.at[:n_new].set(front_mapping)
 
             means = new_means
             chols = new_chols
             inv_chols = jnp.linalg.inv(new_chols)
         else:
-            # Overwrite only the first SAMPLE_SIZE window; keep old content for invalid rows.
+            # Overwrite only the first n_new window; keep old content for invalid rows.
             samples = sampledb_state.samples
             target_lnpdfs = sampledb_state.target_lnpdfs
             target_grads = sampledb_state.target_grads
             mapping = sampledb_state.mapping
 
-            prev_samples = samples[:SAMPLE_SIZE]
-            prev_lnpdfs = target_lnpdfs[:SAMPLE_SIZE]
-            prev_grads = target_grads[:SAMPLE_SIZE]
-            prev_mapping = mapping[:SAMPLE_SIZE]
+            prev_samples = samples[:n_new]
+            prev_lnpdfs = target_lnpdfs[:n_new]
+            prev_grads = target_grads[:n_new]
+            prev_mapping = mapping[:n_new]
 
             new_front_samples = jnp.where(finite_mask_exp, new_samples, prev_samples)
             new_front_lnpdfs = jnp.where(finite_mask, new_target_lnpdfs, prev_lnpdfs)
             new_front_grads = jnp.where(finite_mask_exp, new_target_grads, prev_grads)
             new_front_mapping = jnp.where(finite_mask, new_mapping, prev_mapping)
 
-            samples = samples.at[:SAMPLE_SIZE].set(new_front_samples)
-            target_lnpdfs = target_lnpdfs.at[:SAMPLE_SIZE].set(new_front_lnpdfs)
-            target_grads = target_grads.at[:SAMPLE_SIZE].set(new_front_grads)
-            mapping = mapping.at[:SAMPLE_SIZE].set(new_front_mapping)
+            samples = samples.at[:n_new].set(new_front_samples)
+            target_lnpdfs = target_lnpdfs.at[:n_new].set(new_front_lnpdfs)
+            target_grads = target_grads.at[:n_new].set(new_front_grads)
+            mapping = mapping.at[:n_new].set(new_front_mapping)
 
             means = new_means
             chols = new_chols
