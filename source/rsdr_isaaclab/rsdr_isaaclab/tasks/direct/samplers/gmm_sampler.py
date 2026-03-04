@@ -49,10 +49,19 @@ class GMMVI(LearnableSampler):
         self.beta = float(beta)
         self.current_dist= None
     def get_train_sample_fn(self):
-        return lambda num_samples: self.sample(num_samples)
-    def sample(self, num_samples: int) -> torch.Tensor:
+        return lambda num_samples: self.sample_training(num_samples)
+
+    def sample_model(self, num_samples: int) -> tuple[torch.Tensor, torch.Tensor]:
         self.rng, key = jax.random.split(self.rng)
-        # Use sample selector path for rollout stability/consistency.
+        samples_jax, mapping_jax = self.gmm_network.model.sample(
+            self.gmmvi_state.model_state.gmm_state, key, num_samples
+        )
+        samples_torch = jax_to_torch(samples_jax).to(device=self.device, dtype=torch.float32)
+        mapping_torch = jax_to_torch(mapping_jax).to(device=self.device, dtype=torch.int32)
+        return samples_torch, mapping_torch
+
+    def sample_training(self, num_samples: int) -> tuple[torch.Tensor, torch.Tensor]:
+        self.rng, key = jax.random.split(self.rng)
         samples_jax, mapping_jax = self.gmm_network.sample_selector.select_samples(
             self.gmmvi_state.model_state,
             key,
@@ -65,19 +74,19 @@ class GMMVI(LearnableSampler):
             deficit = num_samples - n_sel
             self.rng, key_pad = jax.random.split(self.rng)
             pad_samples, pad_mapping = self.gmm_network.model.sample(
-                self.gmmvi_state.model_state.gmm_state,
-                key_pad,
-                deficit,
+                self.gmmvi_state.model_state.gmm_state, key_pad, deficit
             )
             samples_jax = jnp.concatenate([samples_jax, pad_samples], axis=0)
             mapping_jax = jnp.concatenate([mapping_jax, pad_mapping.astype(jnp.int32)], axis=0)
-
         samples_torch = jax_to_torch(samples_jax).to(device=self.device, dtype=torch.float32)
-        # mapping might be int/bool; keep dtype
         mapping_torch = jax_to_torch(mapping_jax).to(device=self.device, dtype=torch.int32)
         return samples_torch, mapping_torch
+
+    def sample(self, num_samples: int) -> torch.Tensor:
+        return self.sample_model(num_samples)
+
     def sample_contexts(self, num_samples: int) -> torch.Tensor:
-        samples, _ = self.sample(num_samples)
+        samples, _ = self.sample_model(num_samples)
         return samples
     def log_prob(self, value: torch.Tensor) -> torch.Tensor:
         value_jax = torch_to_jax(value.to("cuda" if value.is_cuda else "cpu"))

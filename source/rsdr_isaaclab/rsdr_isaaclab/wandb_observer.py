@@ -213,7 +213,7 @@ class IsaacWandbAlgoObserver(AlgoObserver):
                 sampler=sampler,
                 sampled_contexts=sampler_sampled_contexts,
                 param_cfg=p,
-                prefix=f"{sampler.name} sampler.sample_contexts",
+                prefix=f"{sampler.name} sampler_draws(model.sample)",
                 bins=40,
             )
             if sampler_img is not None:
