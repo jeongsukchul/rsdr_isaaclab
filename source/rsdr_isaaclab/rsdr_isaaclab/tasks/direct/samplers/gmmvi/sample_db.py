@@ -23,7 +23,17 @@ class SampleDB(NamedTuple):
     get_newest_samples: Callable
 
 
-def setup_sampledb(DIM, KEEP_SAMPLES, MAX_SAMPLES, MAX_COMPONENTS, DIAGONAL_COVS, BATCH_SIZE, SAMPLE_SIZE, inv_bijector) -> SampleDB:
+def setup_sampledb(
+    DIM,
+    KEEP_SAMPLES,
+    MAX_SAMPLES,
+    MAX_COMPONENTS,
+    DIAGONAL_COVS,
+    BATCH_SIZE,
+    SAMPLE_SIZE,
+    inv_bijector,
+    bijector_log_prob,
+) -> SampleDB:
     def init_sample_db_state():
         if DIAGONAL_COVS:
             chols = jnp.zeros((MAX_COMPONENTS, DIM))
@@ -119,14 +129,19 @@ def setup_sampledb(DIM, KEEP_SAMPLES, MAX_SAMPLES, MAX_COMPONENTS, DIAGONAL_COVS
         return sample_db_state.samples[chosen_indices], sample_db_state.target_lnpdfs[chosen_indices]
 
     def _gaussian_log_pdf(mean, chol, inv_chol, x):
+        jac_log_prob = bijector_log_prob(x)
         x = inv_bijector(x)
         if DIAGONAL_COVS:
             constant_part = - 0.5 * DIM * jnp.log(2 * jnp.pi) - jnp.sum(jnp.log(chol))
-            return constant_part - 0.5 * jnp.sum(jnp.square(jnp.expand_dims(inv_chol, 1)
-                                                            * jnp.transpose(jnp.expand_dims(mean, 0) - x)), axis=0)
+            base = constant_part - 0.5 * jnp.sum(
+                jnp.square(jnp.expand_dims(inv_chol, 1) * jnp.transpose(jnp.expand_dims(mean, 0) - x)),
+                axis=0,
+            )
+            return base + jac_log_prob
         else:
             constant_part = - 0.5 * DIM * jnp.log(2 * jnp.pi) - jnp.sum(jnp.log(jnp.diag(chol)))
-            return constant_part - 0.5 * jnp.sum(jnp.square(inv_chol @ jnp.transpose(mean - x)), axis=0)
+            base = constant_part - 0.5 * jnp.sum(jnp.square(inv_chol @ jnp.transpose(mean - x)), axis=0)
+            return base + jac_log_prob
     @partial(jax.jit, static_argnames=('N',))
     def get_newest_samples_deprecated(sampledb_state: SampleDBState, N):
         def _compute_log_pdfs(sampledb_state, component_id, sample):

@@ -3,9 +3,7 @@ import torch
 import numpy as np
 import wandb
 from rsdr_isaaclab.tasks.direct.samplers.sampler import (
-    UDR,
-    render_held_pos_noise_2d_compare_image,
-    render_held_pos_noise_2d_image,
+    render_param_distribution_image,
 )
 
 
@@ -97,7 +95,6 @@ class IsaacWandbAlgoObserver(AlgoObserver):
         self.algo = None
         self.grid_n = 64
         self.vis_num_samples = 2048
-        self._udr_ref_sampler = None
         self._logged_initial_sampler_viz = False
 
         
@@ -173,19 +170,6 @@ class IsaacWandbAlgoObserver(AlgoObserver):
         base = getattr(v, "env", None) or getattr(v, "_env", None) or v
         return getattr(base, "unwrapped", None)
 
-    def _get_udr_ref(self, sampler):
-        if self._udr_ref_sampler is None:
-            self._udr_ref_sampler = UDR(sampler.cfg, sampler.device)
-            return self._udr_ref_sampler
-        if self._udr_ref_sampler.num_params != sampler.num_params:
-            self._udr_ref_sampler = UDR(sampler.cfg, sampler.device)
-            return self._udr_ref_sampler
-        if not torch.allclose(self._udr_ref_sampler.low, sampler.low) or not torch.allclose(
-            self._udr_ref_sampler.high, sampler.high
-        ):
-            self._udr_ref_sampler = UDR(sampler.cfg, sampler.device)
-        return self._udr_ref_sampler
-
     def _log_sampler_2d_viz(self, step: int):
         if wandb.run is None:
             return
@@ -197,36 +181,62 @@ class IsaacWandbAlgoObserver(AlgoObserver):
             return
         extras = dict(getattr(env, "extras", {}))
         contexts = extras.get("dr_samples", None)
+        env_sampled_contexts = None
         if contexts is not None and torch.is_tensor(contexts) and contexts.ndim == 2:
-            num_vis = min(self.vis_num_samples, contexts.shape[0])
-            sampled_contexts = contexts[:num_vis].detach().to(device=sampler.device, dtype=torch.float32)
-        else:
-            sampled_contexts = sampler.sample_contexts(self.vis_num_samples).detach().to(
-                device=sampler.device, dtype=torch.float32
-            )
-            num_vis = sampled_contexts.shape[0]
-        image = render_held_pos_noise_2d_image(
-            sampler=sampler,
-            sampled_contexts=sampled_contexts,
-            prefix=sampler.name,
-            grid_n=max(16, self.grid_n),
-        )
-        if image is not None:
-            wandb.log({f"viz/{sampler.name}/held_pos_noise_2d": wandb.Image(image)}, step=step)
+            n_env = min(self.vis_num_samples, contexts.shape[0])
+            env_sampled_contexts = contexts[:n_env].detach().to(device=sampler.device, dtype=torch.float32)
 
-        udr_sampler = self._get_udr_ref(sampler)
-        udr_contexts = udr_sampler.sample_contexts(num_vis).detach().to(device=sampler.device, dtype=torch.float32)
-        cmp_image = render_held_pos_noise_2d_compare_image(
-            sampler_a=sampler,
-            sampler_b=udr_sampler,
-            sampled_contexts_a=sampled_contexts,
-            sampled_contexts_b=udr_contexts,
-            label_a=sampler.name,
-            label_b="UDR",
-            grid_n=max(16, self.grid_n),
+        sampler_sampled_contexts = sampler.sample_contexts(self.vis_num_samples).detach().to(
+            device=sampler.device, dtype=torch.float32
         )
-        if cmp_image is not None:
-            wandb.log({"viz/held_pos_noise_2d_udr_vs_current": wandb.Image(cmp_image)}, step=step)
+
+        self._log_paramcfg_visualizations(
+            step=step,
+            sampler=sampler,
+            env_sampled_contexts=env_sampled_contexts,
+            sampler_sampled_contexts=sampler_sampled_contexts,
+        )
+
+    def _log_paramcfg_visualizations(
+        self,
+        step: int,
+        sampler,
+        env_sampled_contexts: torch.Tensor | None,
+        sampler_sampled_contexts: torch.Tensor,
+    ):
+        params = [p for p in sampler.cfg.params if getattr(p, "visualize", False)]
+        if not params:
+            return
+
+        for p in params:
+            sampler_img = render_param_distribution_image(
+                sampler=sampler,
+                sampled_contexts=sampler_sampled_contexts,
+                param_cfg=p,
+                prefix=f"{sampler.name} sampler.sample_contexts",
+                bins=40,
+            )
+            if sampler_img is not None:
+                wandb.log(
+                    {f"viz/{sampler.name}/param/{p.name}_sampler_draws": wandb.Image(sampler_img)},
+                    step=step,
+                )
+
+            if env_sampled_contexts is None:
+                continue
+
+            env_img = render_param_distribution_image(
+                sampler=sampler,
+                sampled_contexts=env_sampled_contexts,
+                param_cfg=p,
+                prefix=f"{sampler.name} env.dr_samples",
+                bins=40,
+            )
+            if env_img is not None:
+                wandb.log(
+                    {f"viz/{sampler.name}/param/{p.name}_env_dr_samples": wandb.Image(env_img)},
+                    step=step,
+                )
 
     def _maybe_log_initial_sampler_2d_viz(self, step: int):
         if self._logged_initial_sampler_viz:

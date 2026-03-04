@@ -77,7 +77,8 @@ def create_gmm_network_and_state(
                             cfg.use_diagonal_convs,
                             batch_size,
                             num_envs,
-                            inv_bijector=model.inv_bijector)
+                            inv_bijector=model.inv_bijector,
+                            bijector_log_prob=model.bijector_log_prob)
     sample_db_state = sample_db.init_sampleDB_state()
     quad_regression_fn = setup_quad_regression(dim)
     # 'S' ; Stein Estimator +  'T' : Trust Rgeion Component Updater

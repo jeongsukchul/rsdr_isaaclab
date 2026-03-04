@@ -3,6 +3,8 @@ import torch.nn as nn
 import torch.distributions as D
 from .distributions import UniformDist, BetasDist, BoundarySamplingDist, NormFlowDist, MultivariateNormalDist
 import numpy as np
+import math
+from itertools import combinations
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -54,7 +56,68 @@ def _scatter_xy(sampled_contexts, idx):
     return sampled_contexts[:, idx].detach().cpu().numpy()
 
 
-def render_held_pos_noise_2d_image(sampler, sampled_contexts: torch.Tensor, prefix: str = "train", grid_n: int = 64):
+def render_param_distribution_image(
+    sampler,
+    sampled_contexts: torch.Tensor,
+    param_cfg,
+    prefix: str = "train",
+    bins: int = 48,
+):
+    """Visualize sampled distribution for one parameter config.
+
+    - size==1: histogram
+    - size>=2: one subplot per pair (sizeC2 for size>2)
+    """
+    idx = list(param_cfg.indices)
+    if len(idx) == 0:
+        return None
+
+    sampled = sampled_contexts[:, idx].detach().cpu().numpy()
+    low = sampler.low[idx].detach().cpu().numpy()
+    high = sampler.high[idx].detach().cpu().numpy()
+
+    if len(idx) == 1:
+        fig, ax = plt.subplots(1, 1, figsize=(5.5, 3.8), dpi=120)
+        ax.hist(sampled[:, 0], bins=max(16, bins), range=(low[0], high[0]), color="#1f77b4", alpha=0.85)
+        ax.set_xlim(low[0], high[0])
+        ax.set_title(f"{param_cfg.name}")
+        ax.set_xlabel(param_cfg.name)
+        ax.set_ylabel("count")
+        fig.tight_layout()
+    else:
+        pairs = list(combinations(range(len(idx)), 2))
+        n = len(pairs)
+        ncols = min(4, n)
+        nrows = int(math.ceil(n / ncols))
+        fig, axes = plt.subplots(nrows, ncols, figsize=(4.2 * ncols, 3.8 * nrows), dpi=120, squeeze=False)
+        for p, (i, j) in enumerate(pairs):
+            r, c = divmod(p, ncols)
+            ax = axes[r, c]
+            ax.hist2d(
+                sampled[:, i],
+                sampled[:, j],
+                bins=max(16, bins),
+                range=[[low[i], high[i]], [low[j], high[j]]],
+                cmap="viridis",
+            )
+            ax.set_xlim(low[i], high[i])
+            ax.set_ylim(low[j], high[j])
+            ax.set_xlabel(f"{param_cfg.name}[{i}]")
+            ax.set_ylabel(f"{param_cfg.name}[{j}]")
+            ax.set_title(f"{param_cfg.name} ({i},{j})")
+
+        for k in range(n, nrows * ncols):
+            r, c = divmod(k, ncols)
+            axes[r, c].axis("off")
+        fig.tight_layout()
+
+    fig.canvas.draw()
+    image = np.asarray(fig.canvas.buffer_rgba(), dtype=np.uint8)[..., :3].copy()
+    plt.close(fig)
+    return image
+
+
+def render_held_pos_noise_2d_image(sampler, sampled_contexts: torch.Tensor, prefix: str = "held_pos_noise", grid_n: int = 64):
     """Create [log-prob heatmap + sampled x,y scatter] for held_pos_noise (2D)."""
     idx = _held_pos_noise_indices_2d(sampler)
     if idx is None:
@@ -77,7 +140,7 @@ def render_held_pos_noise_2d_image(sampler, sampled_contexts: torch.Tensor, pref
         aspect="auto",
         cmap="viridis",
     )
-    axes[0].set_title(f"{prefix} log_prob heatmap (n={grid_n}, span={lp_span:.3g})")
+    axes[0].set_title(f"log_prob heatmap (n={grid_n}, span={lp_span:.3g})")
     axes[0].set_xlabel("held_pos_noise x")
     axes[0].set_ylabel("held_pos_noise y")
     fig.colorbar(im, ax=axes[0], fraction=0.046, pad=0.04)
@@ -89,7 +152,7 @@ def render_held_pos_noise_2d_image(sampler, sampled_contexts: torch.Tensor, pref
         aspect="auto",
         cmap="magma",
     )
-    axes[1].set_title(f"{prefix} prob heatmap")
+    axes[1].set_title("prob heatmap")
     axes[1].set_xlabel("held_pos_noise x")
     axes[1].set_ylabel("held_pos_noise y")
     fig.colorbar(im_prob, ax=axes[1], fraction=0.046, pad=0.04)
@@ -97,10 +160,10 @@ def render_held_pos_noise_2d_image(sampler, sampled_contexts: torch.Tensor, pref
     axes[2].scatter(sampled_xy[:, 0], sampled_xy[:, 1], s=8, alpha=0.65, c="#1f77b4")
     axes[2].set_xlim(low_xy_np[0], high_xy_np[0])
     axes[2].set_ylim(low_xy_np[1], high_xy_np[1])
-    axes[2].set_title(f"{prefix} sampled x,y")
+    axes[2].set_title("sampled x,y")
     axes[2].set_xlabel("held_pos_noise x")
     axes[2].set_ylabel("held_pos_noise y")
-    fig.suptitle(f"{sampler.name} 2D held_pos_noise")
+    fig.suptitle(prefix)
     fig.tight_layout()
 
     fig.canvas.draw()
@@ -117,6 +180,7 @@ def render_held_pos_noise_2d_compare_image(
     label_a: str = "A",
     label_b: str = "B",
     grid_n: int = 64,
+    title: str = "held_pos_noise",
 ):
     """Create [A/B log-prob heatmaps + A/B sampled x,y] comparison for held_pos_noise (2D)."""
     idx = _held_pos_noise_indices_2d(sampler_a)
@@ -202,7 +266,7 @@ def render_held_pos_noise_2d_compare_image(
     axes[1, 0].set_xlim(low_xy_np[0], high_xy_np[0])
     axes[1, 0].set_ylim(low_xy_np[1], high_xy_np[1])
 
-    fig.suptitle("2D held_pos_noise: UDR vs GMMVI")
+    fig.suptitle(title)
     fig.tight_layout()
 
     fig.canvas.draw()

@@ -22,12 +22,13 @@ class RandomizationParamCfg:
     target_asset: str
     target_indices: Optional[List[int]] = None 
     indices: List[int] = field(default_factory=list)
+    visualize: bool = False
 
 @dataclass
 class FactoryRandomizationCfg:
     params: List[RandomizationParamCfg] = field(default_factory=list)
     total_params: int = 0
-    only_held_pos_noise_2d: bool = True
+    only_held_pos_noise_2d: bool = False #True
     # [NEW] Pass the Task Config Class here (e.g. PegInsert) to inherit defaults
     task_class: Type[FactoryTask] = PegInsert 
 
@@ -44,7 +45,7 @@ class FactoryRandomizationCfg:
                     name="stiffness", size=6, sampler_type="uniform",
                     hard_bounds=([0.5]*6, [2.]*6), 
                     init_params=([1.]*6), # Start near nominal
-                    event_type="stiffness", target_asset="robot",
+                    event_type="stiffness", target_asset="robot", visualize=True
                 ),
                 # # 2. Damping (7 DoF)
                 # RandomizationParamCfg(
@@ -58,19 +59,19 @@ class FactoryRandomizationCfg:
                     name="robot_friction", size=1, sampler_type="uniform",
                     hard_bounds=([0.1], [4.0]), 
                     init_params=([0.75]),
-                    event_type="friction", target_asset="robot"
+                    event_type="friction", target_asset="robot", visualize=True
                 ),
                 RandomizationParamCfg(
                     name="held_friction", size=1, sampler_type="uniform",
                     hard_bounds=([0.1], [4.0]), 
                     init_params=([0.75]),
-                    event_type="friction", target_asset="robot"
+                    event_type="friction", target_asset="robot", visualize=True
                 ),
                 RandomizationParamCfg(
                     name="fixed_friction", size=1, sampler_type="uniform",
                     hard_bounds=([0.1], [4.0]), 
                     init_params=([0.75]),
-                    event_type="friction", target_asset="robot"
+                    event_type="friction", target_asset="robot", visualize=True
                 ),
                 # --- Reset State (Inherited from Task Config) ---
                 
@@ -85,12 +86,12 @@ class FactoryRandomizationCfg:
                     init_params=(
                         [0.] * 3
                     ),
-                    event_type="reset_noise", target_asset="fixed_asset"
+                    event_type="reset_noise", target_asset="fixed_asset", visualize=True
                 ),
                 
                 # 4. Fixed Asset Yaw Noise (1 dim)
                 # Task Config: fixed_asset_init_orn_range_deg (scalar degrees)
-                # We convert to radians: +/- range
+                # We convert to radians: +/- range,
                 RandomizationParamCfg(
                     name="fixed_yaw_noise", size=1, sampler_type="uniform",
                     hard_bounds=(
@@ -100,7 +101,7 @@ class FactoryRandomizationCfg:
                     init_params=(
                         [0.] 
                     ),
-                    event_type="reset_noise", target_asset="fixed_asset",
+                    event_type="reset_noise", target_asset="fixed_asset", visualize=True
                 ),
 
                 # 5. Hand Init Pos Noise (3 dims)
@@ -114,7 +115,7 @@ class FactoryRandomizationCfg:
                     init_params=(
                         [0.] * 3
                     ),
-                    event_type="reset_noise", target_asset="robot"
+                    event_type="reset_noise", target_asset="robot", visualize=True
                 ),
 
                 # 6. Hand Init Orn Noise (3 dims)
@@ -126,7 +127,7 @@ class FactoryRandomizationCfg:
                         [-task_cfg.hand_init_orn_noise[2]], 
                         [task_cfg.hand_init_orn_noise[2]],
                     ),
-                    event_type="reset_noise", target_asset="robot"
+                    event_type="reset_noise", target_asset="robot", visualize=True
                 ),
                 
                 # 7. Held Asset Pos Noise (3 dims)
@@ -139,7 +140,7 @@ class FactoryRandomizationCfg:
                         [-task_cfg.held_asset_pos_noise[0], -task_cfg.held_asset_pos_noise[2]], 
                         [task_cfg.held_asset_pos_noise[0], task_cfg.held_asset_pos_noise[2]], 
                     ),
-                    event_type="reset_noise", target_asset="held_asset"
+                    event_type="reset_noise", target_asset="held_asset", visualize=True
                 ),
 
                 RandomizationParamCfg(
@@ -149,7 +150,7 @@ class FactoryRandomizationCfg:
                         [1/(1+v) for v in ctrl_cfg.pos_threshold_noise_level], 
                         [(1+v) for v in ctrl_cfg.pos_threshold_noise_level]
                     ),
-                    event_type="pos_threshold", target_asset="robot"
+                    event_type="pos_threshold", target_asset="robot", visualize=True
                 ),
                 RandomizationParamCfg(
                     name="rot_threshold", size=3, sampler_type="uniform",
@@ -158,7 +159,7 @@ class FactoryRandomizationCfg:
                         [1/(1+v) for v in ctrl_cfg.rot_threshold_noise_level], 
                         [(1+v) for v in ctrl_cfg.rot_threshold_noise_level]
                     ),
-                    event_type="rot_threshold", target_asset="robot"
+                    event_type="rot_threshold", target_asset="robot", visualize=True
                 ),
                 RandomizationParamCfg(
                     name="ema", size=1, sampler_type="uniform",
@@ -167,7 +168,7 @@ class FactoryRandomizationCfg:
                         [ctrl_cfg.ema_factor_range[0]],
                         [ctrl_cfg.ema_factor_range[1]]
                     ),
-                    event_type="ema", target_asset="robot"
+                    event_type="ema", target_asset="robot", visualize=True
                 ),
             ]
         if self.only_held_pos_noise_2d:

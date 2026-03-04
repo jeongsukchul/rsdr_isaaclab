@@ -15,7 +15,6 @@ num_initial_components : 20
 use_sample_database :  True
 max_database_size :  100000
 # sample selector config
-batch_size :  128 
 ratio_reused_samples_to_desired :  0.0
 #component stepsize config
 min_stepsize :  1e-4

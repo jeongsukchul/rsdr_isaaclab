@@ -21,10 +21,18 @@ def torch_to_jax(t: torch.Tensor):
     if not t.is_contiguous():
         t = t.contiguous()
     return jax.dlpack.from_dlpack(torch.utils.dlpack.to_dlpack(t))
+
+
+def _almost_uniform_mapping(num_samples: int, num_components: int, key: jax.Array) -> jax.Array:
+    """Near-uniform component ids (counts differ by at most 1), then shuffled."""
+    num_components = max(1, int(num_components))
+    base = jnp.arange(num_samples, dtype=jnp.int32) % jnp.int32(num_components)
+    return jax.random.permutation(key, base)
 class GMMVI(LearnableSampler):
     def __init__(self, cfg, device: str, 
                  beta=1.0, 
-                 batch_size=128, 
+                 num_envs=128,
+                 batch_size=1024, 
                  **kwargs):
         super().__init__(cfg, device)
         self.name = "GMMVI"
@@ -32,7 +40,7 @@ class GMMVI(LearnableSampler):
         rng = jax.random.PRNGKey(torch.cuda.initial_seed() % (2**32))
         self.rng, init_key = jax.random.split(rng) 
         init_gmmvi_state, gmm_network = create_gmm_network_and_state(cfg.total_params, \
-                                                               batch_size, batch_size, init_key,\
+                                                               num_envs, batch_size, init_key,\
                                                                 bound_info=bound_info)
         self.gmmvi_state = init_gmmvi_state
         self.gmm_network = gmm_network
@@ -75,10 +83,30 @@ class GMMVI(LearnableSampler):
         returns_jax = torch_to_jax(returns)
         samples_jax = torch_to_jax(samples_torch)
         mapping_jax = torch_to_jax(mapping_torch).astype(jnp.int32)
-        # print("returns_jax", returns_jax.shape)
-        # print("samples_jax", samples_jax.shape)
-        # print("mapping_jax", mapping_jax.shape)
         target_lnpdfs = returns_jax * self.beta
+
+        # Initial bootstrap only:
+        # when batch_size > num_envs, fill the first DB batch to sample_size
+        # using zero-target samples and (almost) uniform mapping.
+        written_before = int(jax.device_get(self.gmmvi_state.sample_db_state.num_samples_written)[0])
+        if written_before < self.sample_size:
+            deficit = max(0, int(self.sample_size - samples_jax.shape[0]))
+            if deficit > 0:
+                num_components = int(self.gmmvi_state.model_state.gmm_state.num_components)
+                self.rng, map_key, sample_key = jax.random.split(self.rng, 3)
+                pad_mapping = _almost_uniform_mapping(deficit, num_components, map_key)
+                pad_samples, _ = self.gmm_network.model.sample_from_components_shuffle(
+                    self.gmmvi_state.model_state.gmm_state,
+                    pad_mapping,
+                    sample_key,
+                )
+                samples_jax = jnp.concatenate([samples_jax, pad_samples], axis=0)
+                mapping_jax = jnp.concatenate([mapping_jax, pad_mapping], axis=0)
+                target_lnpdfs = jnp.concatenate(
+                    [target_lnpdfs, jnp.zeros((deficit,), dtype=target_lnpdfs.dtype)],
+                    axis=0,
+                )
+
         self.rng, update_key = jax.random.split(self.rng)
         new_sample_db_state = self.gmm_network.sample_selector.save_samples(
             self.gmmvi_state.model_state,
