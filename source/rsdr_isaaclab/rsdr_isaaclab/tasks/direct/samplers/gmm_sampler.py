@@ -49,7 +49,7 @@ class GMMVI(LearnableSampler):
         self.beta = float(beta)
         self.current_dist= None
     def get_train_sample_fn(self):
-        return lambda num_samples: self.sample_training(num_samples)
+        return lambda num_samples: self.sample_model(num_samples)
 
     def sample_model(self, num_samples: int) -> tuple[torch.Tensor, torch.Tensor]:
         self.rng, key = jax.random.split(self.rng)

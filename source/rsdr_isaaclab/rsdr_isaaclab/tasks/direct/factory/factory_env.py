@@ -506,10 +506,11 @@ class FactoryEnv(DirectRLEnv):
                 success_threshold=self.cfg_task.success_threshold, check_rot=check_rot
             )
             success_rate = torch.count_nonzero(curr_successes) / self.num_envs
+            contexts = self.dr_context.detach()
+            returns = self.ep_return.detach()
+            scaled_returns = returns / self.max_episode_length * self.cfg.task.reward_scale
+
             if not self._uniform_eval:
-                contexts = self.dr_context.detach()
-                returns  = self.ep_return.detach()
-                scaled_returns = returns / self.max_episode_length * self.cfg.task.reward_scale
                 if self.sampler.name == 'DORAEMON' or self.sampler.name == 'ADR':
                     self.sampler.update(contexts, curr_successes)
                 elif self.sampler.name == "GMMVI":
@@ -537,7 +538,7 @@ class FactoryEnv(DirectRLEnv):
                 self.extras[f"{prefix}/episode_return_cvar20"] = ep_ret[ep_ret <= torch.quantile(ep_ret, 0.20)].mean()
                 self.extras[f"{prefix}/episode_return_cvar10"] = ep_ret[ep_ret <= torch.quantile(ep_ret, 0.10)].mean()
                 self.extras[f"{prefix}/episode_return_std"]  = ep_ret.std(unbiased=False)
-                self.extras[f"{prefix}/norm_ep_return"]      = ep_ret.mean() / self.max_episode_length * self.cfg.task.reward_scale
+                self.extras[f"{prefix}/norm_ep_return"]      = scaled_returns.mean()
                 # CRITICAL: reset accumulator even in eval
                 self.ep_return[env_ids] = 0.0
         self._first_reset = False
