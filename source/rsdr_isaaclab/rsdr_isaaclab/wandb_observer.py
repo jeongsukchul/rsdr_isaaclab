@@ -4,6 +4,7 @@ import numpy as np
 import wandb
 from rsdr_isaaclab.tasks.direct.samplers.sampler import (
     render_param_distribution_image,
+    render_pairwise_marginal_image,
 )
 
 
@@ -94,7 +95,7 @@ class IsaacWandbAlgoObserver(AlgoObserver):
         self.log_step = str(log_step)
         self.algo = None
         self.grid_n = 64
-        self.vis_num_samples = 2048
+        self.vis_num_samples = 4096
         self._logged_initial_sampler_viz = False
 
         
@@ -103,6 +104,7 @@ class IsaacWandbAlgoObserver(AlgoObserver):
         self.mean_scores = torch_ext.AverageMeter(1, self.algo.games_to_track).to(self.algo.ppo_device)
         self.ep_infos = []
         self.direct_info = {}
+        self.train_info_cache = {}
         self.writer = self.algo.writer
 
     def process_infos(self, infos, done_indices):
@@ -114,11 +116,12 @@ class IsaacWandbAlgoObserver(AlgoObserver):
             self.ep_infos.append(infos["episode"])
         # log other variables directly
         if len(infos) > 0 and isinstance(infos, dict):  # allow direct logging from env
-            self.direct_info = {}
             for k, v in infos.items():
                 # only log scalars
-                if isinstance(v, float) or isinstance(v, int) or (isinstance(v, torch.Tensor) and len(v.shape) == 0):
-                    self.direct_info[k] = v
+                if isinstance(v, (float, int)):
+                    self.direct_info[k] = float(v)
+                elif isinstance(v, torch.Tensor) and len(v.shape) == 0:
+                    self.direct_info[k] = float(v.item())
 
     def after_clear_stats(self):
         # clear stored buffers
@@ -144,17 +147,19 @@ class IsaacWandbAlgoObserver(AlgoObserver):
         #         value = torch.mean(info_tensor)
         #         self.writer.add_scalar("Episode/" + key, value, epoch_num)
         #     self.ep_infos.clear()
-        # log scalars from env information
-        for k, v in self.direct_info.items():
-            prefix = k.split("/")[0]
-            if "eval" not in prefix:
-                # print(f"Logging {k}={v} from env infos.")
-                # self.writer.add_scalar(f"{k}", v, frame)
-                wandb.log({k : v}, step=int(frame))
-            # self.writer.add_scalar(f"{k}/frame", v, frame)
-            # self.writer.add_scalar(f"{k}/iter", v, epoch_num)
-            # self.writer.add_scalar(f"{k}/time", v, total_time)
-        wandb.log({"train/frame": frame, "train/epoch": epoch_num}, step=int(frame))
+        # log scalars from env information collected during stepping
+        train_metrics = dict(self.direct_info)
+        # also pull latest env.extras so metrics emitted on reset are not missed
+        train_metrics.update(self._collect_env_extra_scalars())
+        for k, v in train_metrics.items():
+            if k.startswith("train/"):
+                self.train_info_cache[k] = v
+        train_metrics.update(self.train_info_cache)
+        payload = {k: v for k, v in train_metrics.items() if not k.startswith("eval/")}
+        payload["train/_metric_count"] = float(len(payload))
+        payload.update({"train/frame": float(frame), "train/epoch": float(epoch_num)})
+        wandb.log(payload, step=int(frame))
+        self.direct_info.clear()
 
         self._log_sampler_2d_viz(step=int(frame))
         
@@ -169,6 +174,36 @@ class IsaacWandbAlgoObserver(AlgoObserver):
         v = self.algo.vec_env
         base = getattr(v, "env", None) or getattr(v, "_env", None) or v
         return getattr(base, "unwrapped", None)
+
+    @staticmethod
+    def _to_scalar(value):
+        if isinstance(value, (float, int)):
+            return float(value)
+        if isinstance(value, np.generic):
+            return float(value.item())
+        if torch.is_tensor(value) and value.numel() == 1:
+            return float(value.item())
+        return None
+
+    def _collect_scalar_metrics(self, data, prefix=""):
+        out = {}
+        if isinstance(data, dict):
+            for k, v in data.items():
+                key = f"{prefix}/{k}" if prefix else str(k)
+                if isinstance(v, dict):
+                    out.update(self._collect_scalar_metrics(v, key))
+                else:
+                    scalar = self._to_scalar(v)
+                    if scalar is not None:
+                        out[key] = scalar
+        return out
+
+    def _collect_env_extra_scalars(self):
+        env = self._get_factory_env()
+        if env is None:
+            return {}
+        extras = dict(getattr(env, "extras", {}))
+        return self._collect_scalar_metrics(extras)
 
     def _log_sampler_2d_viz(self, step: int):
         if wandb.run is None:
@@ -189,6 +224,20 @@ class IsaacWandbAlgoObserver(AlgoObserver):
         sampler_sampled_contexts = sampler.sample_contexts(self.vis_num_samples).detach().to(
             device=sampler.device, dtype=torch.float32
         )
+
+        pair_img_sampler = render_pairwise_marginal_image(
+            sampler=sampler,
+            context_source=sampler_sampled_contexts,
+            samples=sampler_sampled_contexts,
+            eval_samples=None,
+            marginal_mc_samples=64,
+            num_grid=80,
+        )
+        if pair_img_sampler is not None:
+            wandb.log(
+                {f"viz/{sampler.name}/pairwise/sampler": wandb.Image(pair_img_sampler)},
+                step=step,
+            )
 
         self._log_paramcfg_visualizations(
             step=step,

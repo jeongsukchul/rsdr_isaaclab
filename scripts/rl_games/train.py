@@ -40,8 +40,8 @@ parser.add_argument(
     const=True,
     help="Run evaluation observer inside training process (slower).",
 )
-parser.add_argument("--eval_every", type=int, default=4, help="In-process eval frequency in epochs.")
-parser.add_argument("--train_eval_every", type=int, default=10, help="In-process eval frequency in epochs.")
+parser.add_argument("--eval_every", type=int, default=10, help="In-process eval frequency in epochs.")
+parser.add_argument("--train_eval_every", type=int, default=50, help="In-process eval frequency in epochs.")
 parser.add_argument("--train_eval_episodes", type=int, default=10, help="Episodes per in-process eval.")
 parser.add_argument("--wandb-project-name", type=str, default="factory", help="the wandb's project name")
 parser.add_argument("--wandb-entity", type=str, default="tjrcjf410-seoul-national-university", help="the entity (team) of wandb's project")
@@ -270,7 +270,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # import copy
     observers_list = [IsaacWandbAlgoObserver(eval_every = args_cli.eval_every,)]
     if args_cli.train_eval_observer:
-        from rsdr_isaaclab.tasks.direct.eval_observer import UniformEvalObserver
+        from rsdr_isaaclab.eval_observer import UniformEvalObserver
 
         observers_list.append(
             UniformEvalObserver(

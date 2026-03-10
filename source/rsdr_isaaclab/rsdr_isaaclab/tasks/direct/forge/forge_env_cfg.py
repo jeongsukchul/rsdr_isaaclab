@@ -92,6 +92,7 @@ class EventCfg:
 @configclass
 class ForgeEnvCfg(FactoryEnvCfg):
     action_space: int = 7
+    dr_update_batch_size: int = 1024
     obs_rand: ForgeObsRandCfg = ForgeObsRandCfg()
     ctrl: ForgeCtrlCfg = ForgeCtrlCfg()
     task: ForgeTask = ForgeTask()

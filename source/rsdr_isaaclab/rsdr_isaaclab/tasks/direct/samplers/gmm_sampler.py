@@ -13,14 +13,22 @@ logging.getLogger("jax._src").setLevel(logging.WARNING)
 logging.basicConfig(level=logging.INFO)  # or WARNING
 def jax_to_torch(x):
     """JAX array -> Torch tensor (zero-copy via DLPack when possible)."""
-    return torch.utils.dlpack.from_dlpack(jax.dlpack.to_dlpack(x))
+    try:
+        return torch.utils.dlpack.from_dlpack(x)
+    except TypeError:
+        # Compatibility fallback for older JAX/Torch combos.
+        return torch.utils.dlpack.from_dlpack(jax.dlpack.to_dlpack(x))
 
 def torch_to_jax(t: torch.Tensor):
     """Torch tensor -> JAX array (zero-copy via DLPack when possible)."""
     # Ensure contiguous to avoid surprises
     if not t.is_contiguous():
         t = t.contiguous()
-    return jax.dlpack.from_dlpack(torch.utils.dlpack.to_dlpack(t))
+    try:
+        return jax.dlpack.from_dlpack(t)
+    except TypeError:
+        # Compatibility fallback for older JAX/Torch combos.
+        return jax.dlpack.from_dlpack(torch.utils.dlpack.to_dlpack(t))
 
 
 def _almost_uniform_mapping(num_samples: int, num_components: int, key: jax.Array) -> jax.Array:
@@ -60,27 +68,27 @@ class GMMVI(LearnableSampler):
         mapping_torch = jax_to_torch(mapping_jax).to(device=self.device, dtype=torch.int32)
         return samples_torch, mapping_torch
 
-    def sample_training(self, num_samples: int) -> tuple[torch.Tensor, torch.Tensor]:
-        self.rng, key = jax.random.split(self.rng)
-        samples_jax, mapping_jax = self.gmm_network.sample_selector.select_samples(
-            self.gmmvi_state.model_state,
-            key,
-        )
-        n_sel = int(samples_jax.shape[0])
-        if n_sel > num_samples:
-            samples_jax = samples_jax[:num_samples]
-            mapping_jax = mapping_jax[:num_samples]
-        elif n_sel < num_samples:
-            deficit = num_samples - n_sel
-            self.rng, key_pad = jax.random.split(self.rng)
-            pad_samples, pad_mapping = self.gmm_network.model.sample(
-                self.gmmvi_state.model_state.gmm_state, key_pad, deficit
-            )
-            samples_jax = jnp.concatenate([samples_jax, pad_samples], axis=0)
-            mapping_jax = jnp.concatenate([mapping_jax, pad_mapping.astype(jnp.int32)], axis=0)
-        samples_torch = jax_to_torch(samples_jax).to(device=self.device, dtype=torch.float32)
-        mapping_torch = jax_to_torch(mapping_jax).to(device=self.device, dtype=torch.int32)
-        return samples_torch, mapping_torch
+    # def sample_training(self, num_samples: int) -> tuple[torch.Tensor, torch.Tensor]:
+    #     self.rng, key = jax.random.split(self.rng)
+    #     samples_jax, mapping_jax = self.gmm_network.sample_selector.select_samples(
+    #         self.gmmvi_state.model_state,
+    #         key,
+    #     )
+    #     n_sel = int(samples_jax.shape[0])
+    #     if n_sel > num_samples:
+    #         samples_jax = samples_jax[:num_samples]
+    #         mapping_jax = mapping_jax[:num_samples]
+    #     elif n_sel < num_samples:
+    #         deficit = num_samples - n_sel
+    #         self.rng, key_pad = jax.random.split(self.rng)
+    #         pad_samples, pad_mapping = self.gmm_network.model.sample(
+    #             self.gmmvi_state.model_state.gmm_state, key_pad, deficit
+    #         )
+    #         samples_jax = jnp.concatenate([samples_jax, pad_samples], axis=0)
+    #         mapping_jax = jnp.concatenate([mapping_jax, pad_mapping.astype(jnp.int32)], axis=0)
+    #     samples_torch = jax_to_torch(samples_jax).to(device=self.device, dtype=torch.float32)
+    #     mapping_torch = jax_to_torch(mapping_jax).to(device=self.device, dtype=torch.int32)
+    #     return samples_torch, mapping_torch
 
     def sample(self, num_samples: int) -> torch.Tensor:
         return self.sample_model(num_samples)

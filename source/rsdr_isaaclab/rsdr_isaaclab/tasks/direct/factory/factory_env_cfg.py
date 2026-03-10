@@ -98,6 +98,7 @@ class FactoryEnvCfg(DirectRLEnvCfg):
     ]
 
     task_name: str = "peg_insert"  # peg_insert, gear_mesh, nut_thread
+    dr_update_batch_size: int = 1024
     task: FactoryTask = FactoryTask()
     obs_rand: ObsRandCfg = ObsRandCfg()
     ctrl: CtrlCfg = CtrlCfg()
@@ -238,10 +239,11 @@ class FactoryTaskPegInsert_GOFLOW_Cfg(FactoryTaskPegInsertCfg):
     )
 @configclass
 class FactoryTaskPegInsert_GMMVI_Cfg(FactoryTaskPegInsertCfg):
+    scene = InteractiveSceneCfg(num_envs=128, env_spacing=2.0, clone_in_fabric=True)
     sampler_class = GMMVI
     sampler_kwargs = dict(
         beta=1.,
-        num_envs= 128,
+        num_envs=1024,
         batch_size=1024,
     )
 @configclass

@@ -43,6 +43,12 @@ class FactoryEnv(DirectRLEnv):
         self._set_default_dynamics_parameters()
         self._uniform_eval = False
         self._first_reset = True
+        cfg_batch = int(getattr(cfg, "dr_update_batch_size", 0))
+        kw_batch = int(getattr(cfg, "sampler_kwargs", {}).get("batch_size", 0))
+        self._dr_update_batch_size = int(max(1, cfg_batch if cfg_batch > 0 else (kw_batch if kw_batch > 0 else self.num_envs)))
+        self._dr_ctx_buffer = torch.empty((0, self.sampler.num_params), dtype=torch.float32, device=self.device)
+        self._dr_ret_buffer = torch.empty((0,), dtype=torch.float32, device=self.device)
+        self._dr_map_buffer = torch.empty((0,), dtype=torch.int32, device=self.device)
         print("max episode length:", self.max_episode_length)
     def set_uniform_eval(self, enabled: bool):
         self._uniform_eval = bool(enabled)
@@ -500,24 +506,44 @@ class FactoryEnv(DirectRLEnv):
         print("RESET IDX called, uniform_eval=", self._uniform_eval,
           "num_env_ids=", 0 if env_ids is None else len(env_ids))
         super()._reset_idx(env_ids)
-        if not self._first_reset:
-            check_rot = self.cfg_task.name == "nut_thread"
-            curr_successes = self._get_curr_successes(
-                success_threshold=self.cfg_task.success_threshold, check_rot=check_rot
-            )
-            success_rate = torch.count_nonzero(curr_successes) / self.num_envs
-            contexts = self.dr_context.detach()
-            returns = self.ep_return.detach()
-            scaled_returns = returns / self.max_episode_length * self.cfg.task.reward_scale
+        check_rot = self.cfg_task.name == "nut_thread"
+        curr_successes = self._get_curr_successes(
+            success_threshold=self.cfg_task.success_threshold, check_rot=check_rot
+        )
+        success_rate = torch.count_nonzero(curr_successes) / self.num_envs
+        contexts = self.dr_context.detach()
+        returns = self.ep_return.detach()
+        scaled_returns = returns / self.max_episode_length * self.cfg.task.reward_scale
 
+        if not self._first_reset:
             if not self._uniform_eval:
-                if self.sampler.name == 'DORAEMON' or self.sampler.name == 'ADR':
+                if self.sampler.name == "DORAEMON" or self.sampler.name == "ADR":
                     self.sampler.update(contexts, curr_successes)
-                elif self.sampler.name == "GMMVI":
-                    mapping = self.mapping.detach()
-                    self.sampler.update(contexts, mapping, scaled_returns)
                 else:
-                    self.sampler.update(contexts, scaled_returns)
+                    self._dr_ctx_buffer = torch.cat([self._dr_ctx_buffer, contexts], dim=0)
+                    self._dr_ret_buffer = torch.cat([self._dr_ret_buffer, scaled_returns], dim=0)
+                    if self.sampler.name == "GMMVI":
+                        self._dr_map_buffer = torch.cat([self._dr_map_buffer, self.mapping.detach()], dim=0)
+
+                    num_updates = 0
+                    while self._dr_ctx_buffer.shape[0] >= self._dr_update_batch_size:
+                        b = self._dr_update_batch_size
+                        ctx_batch = self._dr_ctx_buffer[:b]
+                        ret_batch = self._dr_ret_buffer[:b]
+                        if self.sampler.name == "GMMVI":
+                            map_batch = self._dr_map_buffer[:b]
+                            self.sampler.update(ctx_batch, map_batch, ret_batch)
+                            self._dr_map_buffer = self._dr_map_buffer[b:]
+                        else:
+                            self.sampler.update(ctx_batch, ret_batch)
+                        self._dr_ctx_buffer = self._dr_ctx_buffer[b:]
+                        self._dr_ret_buffer = self._dr_ret_buffer[b:]
+                        num_updates += 1
+
+                    self.extras["train/dr_update_batch_size"] = float(self._dr_update_batch_size)
+                    self.extras["train/dr_update_buffer_size"] = float(self._dr_ctx_buffer.shape[0])
+                    if num_updates > 0:
+                        self.extras["train/dr_updates_this_reset"] = float(num_updates)
             if env_ids is not None and len(env_ids) > 0 :
                 ep_ret = self.ep_return[env_ids]
                 prefix = "eval" if self._uniform_eval else "train"
@@ -539,6 +565,15 @@ class FactoryEnv(DirectRLEnv):
                 self.extras[f"{prefix}/episode_return_cvar10"] = ep_ret[ep_ret <= torch.quantile(ep_ret, 0.10)].mean()
                 self.extras[f"{prefix}/episode_return_std"]  = ep_ret.std(unbiased=False)
                 self.extras[f"{prefix}/norm_ep_return"]      = scaled_returns.mean()
+                self.extras[f"{prefix}/norm_ep_return_min"]      = scaled_returns.min()
+                self.extras[f"{prefix}/norm_ep_return_max"]      = scaled_returns.max()
+                self.extras[f"{prefix}/norm_ep_return_p75"]      = torch.quantile(scaled_returns, 0.75)
+                self.extras[f"{prefix}/norm_ep_return_p50"]      = torch.quantile(scaled_returns, 0.50)
+                self.extras[f"{prefix}/norm_ep_return_p25"]      = torch.quantile(scaled_returns, 0.25)
+                self.extras[f"{prefix}/norm_ep_return_p10"]      = torch.quantile(scaled_returns, 0.10)
+                self.extras[f"{prefix}/norm_ep_return_p05"]      = torch.quantile(scaled_returns, 0.05)
+                self.extras[f"{prefix}/norm_ep_return_cvar20"]   = scaled_returns[scaled_returns <= torch.quantile(scaled_returns, 0.20)].mean()
+                self.extras[f"{prefix}/norm_ep_return_cvar10"]   = scaled_returns[scaled_returns <= torch.quantile(scaled_returns, 0.10)].mean()
                 # CRITICAL: reset accumulator even in eval
                 self.ep_return[env_ids] = 0.0
         self._first_reset = False
@@ -547,13 +582,16 @@ class FactoryEnv(DirectRLEnv):
         self._set_franka_to_default_pose(joints=self.cfg.ctrl.reset_joints, env_ids=env_ids)
         self.step_sim_no_action()
         ref_volume = self.sampler.volume(self.sampler.low, self.sampler.high)
-        self.extras[f"train/ref_entropy"] = 1/ref_volume * torch.log(torch.tensor(ref_volume)).item()
+        ref_volume_t = ref_volume.detach() if torch.is_tensor(ref_volume) else torch.tensor(ref_volume, device=self.device)
+        self.extras[f"train/ref_entropy"] = (torch.log(ref_volume_t) / ref_volume_t).item()
         self.extras[f"train/ref_volume"]  = ref_volume
         if self.sampler.name == "ADR":
             self.extras[f"train/current_volume"]  = self.sampler.volume(self.sampler.current_low, self.sampler.current_high)
             self.extras[f"train/VolumeCoverage"]  = self.extras[f"train/current_volume"] / self.extras[f"train/ref_volume"]
         elif self.sampler.name == "DORAEMON":
             self.extras[f"train/current_entropy"]  = self.sampler.entropy()
+        elif self.sampler.name =="GMMVI":
+            self.extras[f"train/beta"] = self.sampler.beta
 
         dr_randomization.apply_learned_randomization(self, env_ids)
 

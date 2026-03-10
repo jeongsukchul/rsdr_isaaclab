@@ -275,15 +275,35 @@ class ForgeEnv(FactoryEnv):
             success_rate = torch.count_nonzero(curr_successes) / self.num_envs
             if not self._uniform_eval:
                 contexts = self.dr_context.detach()
-                returns  = self.ep_return.detach()
+                returns = self.ep_return.detach()
                 scaled_returns = returns / self.max_episode_length * self.cfg.task.reward_scale
-                if self.sampler.name == 'DORAEMON' or self.sampler.name == 'ADR':
+                if self.sampler.name == "DORAEMON" or self.sampler.name == "ADR":
                     self.sampler.update(contexts, curr_successes)
-                elif self.sampler.name == "GMMVI":
-                    mapping = self.mapping.detach()
-                    self.sampler.update(contexts, mapping, scaled_returns)
                 else:
-                    self.sampler.update(contexts, scaled_returns)
+                    self._dr_ctx_buffer = torch.cat([self._dr_ctx_buffer, contexts], dim=0)
+                    self._dr_ret_buffer = torch.cat([self._dr_ret_buffer, scaled_returns], dim=0)
+                    if self.sampler.name == "GMMVI":
+                        self._dr_map_buffer = torch.cat([self._dr_map_buffer, self.mapping.detach()], dim=0)
+
+                    num_updates = 0
+                    while self._dr_ctx_buffer.shape[0] >= self._dr_update_batch_size:
+                        b = self._dr_update_batch_size
+                        ctx_batch = self._dr_ctx_buffer[:b]
+                        ret_batch = self._dr_ret_buffer[:b]
+                        if self.sampler.name == "GMMVI":
+                            map_batch = self._dr_map_buffer[:b]
+                            self.sampler.update(ctx_batch, map_batch, ret_batch)
+                            self._dr_map_buffer = self._dr_map_buffer[b:]
+                        else:
+                            self.sampler.update(ctx_batch, ret_batch)
+                        self._dr_ctx_buffer = self._dr_ctx_buffer[b:]
+                        self._dr_ret_buffer = self._dr_ret_buffer[b:]
+                        num_updates += 1
+
+                    self.extras["train/dr_update_batch_size"] = float(self._dr_update_batch_size)
+                    self.extras["train/dr_update_buffer_size"] = float(self._dr_ctx_buffer.shape[0])
+                    if num_updates > 0:
+                        self.extras["train/dr_updates_this_reset"] = float(num_updates)
             if env_ids is not None and len(env_ids) > 0 :
                 ep_ret = self.ep_return[env_ids]
                 prefix = "eval" if self._uniform_eval else "train"
