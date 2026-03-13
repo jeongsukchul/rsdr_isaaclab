@@ -66,7 +66,7 @@ class FactoryRandomizationCfg:
                 ),
                 RandomizationParamCfg(
                     name="gripper_mass", size=1, sampler_type="uniform",
-                    hard_bounds=([0.5], [2.0]),
+                    hard_bounds=([0.1], [4.0]),
                     init_params=([1.0]),
                     event_type="mass", target_asset="robot", #visualize=True
                 ),
@@ -142,15 +142,15 @@ class FactoryRandomizationCfg:
                 # 7. Held Asset Pos Noise (3 dims)
                 # Task Config: held_asset_pos_noise = [x, y, z]
                 #TODO : NutThread 의 경우 다르게
-                RandomizationParamCfg(
-                    name="held_pos_noise", size=2, sampler_type="uniform",
-                    init_params=([0.]*2), 
-                    hard_bounds=(
-                        [-task_cfg.held_asset_pos_noise[0], -task_cfg.held_asset_pos_noise[2]], 
-                        [task_cfg.held_asset_pos_noise[0], task_cfg.held_asset_pos_noise[2]], 
-                    ),
-                    event_type="reset_noise", target_asset="held_asset", #visualize=True
-                ),
+                # RandomizationParamCfg(
+                #     name="held_pos_noise", size=2, sampler_type="uniform",
+                #     init_params=([0.]*2), 
+                #     hard_bounds=(
+                #         [-task_cfg.held_asset_pos_noise[0], -task_cfg.held_asset_pos_noise[2]], 
+                #         [task_cfg.held_asset_pos_noise[0], task_cfg.held_asset_pos_noise[2]], 
+                #     ),
+                #     event_type="reset_noise", target_asset="held_asset", #visualize=True
+                # ),
 
                 RandomizationParamCfg(
                     name="pos_threshold", size=3, sampler_type="uniform",

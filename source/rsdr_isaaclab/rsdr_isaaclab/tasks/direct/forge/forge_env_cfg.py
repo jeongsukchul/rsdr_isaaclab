@@ -12,6 +12,7 @@ from isaaclab_tasks.direct.factory.factory_env_cfg import OBS_DIM_CFG, STATE_DIM
 
 from .forge_events import randomize_dead_zone
 from .forge_tasks_cfg import ForgeGearMesh, ForgeNutThread, ForgePegInsert, ForgeTask
+from rsdr_isaaclab.tasks.direct.samplers.gbs_sampler import GBS
 
 OBS_DIM_CFG.update({"force_threshold": 1, "ft_force": 3})
 
@@ -136,6 +137,37 @@ class ForgeTaskPegInsertCfg(ForgeEnvCfg):
 
 
 @configclass
+class ForgeTaskPegInsert_GBS_Cfg(ForgeTaskPegInsertCfg):
+    sampler_class = GBS
+    sampler_kwargs = dict(
+        beta=1.0,
+        batch_size=1024,
+        init_std=1.0,
+        lr=1e-4,
+        clip_grad=1.0,
+        num_steps=32,
+        model_num_layers=2,
+        model_num_hid=64,
+        max_rnd=1e8,
+        sde_ctrl_noise=None,
+        sde_ctrl_dropout=None,
+        use_tanh_bijection=True,
+        clip_prior_to_bounds=False,
+        process_type="vp",
+        diff_coeff_sq_min=0.1,
+        diff_coeff_sq_max=10.0,
+        scale_diff_coeff=1.0,
+        sigma_const=1.0,
+        terminal_t=1.0,
+        train_steps_per_update=1,
+    )
+
+    def __post_init__(self):
+        self.sampler_kwargs = dict(self.sampler_kwargs)
+        self.sampler_kwargs["batch_size"] = int(self.dr_update_batch_size)
+
+
+@configclass
 class ForgeTaskGearMeshCfg(ForgeEnvCfg):
     task_name = "gear_mesh"
     task = ForgeGearMesh()
@@ -143,7 +175,69 @@ class ForgeTaskGearMeshCfg(ForgeEnvCfg):
 
 
 @configclass
+class ForgeTaskGearMesh_GBS_Cfg(ForgeTaskGearMeshCfg):
+    sampler_class = GBS
+    sampler_kwargs = dict(
+        beta=1.0,
+        batch_size=1024,
+        init_std=1.0,
+        lr=1e-4,
+        clip_grad=1.0,
+        num_steps=32,
+        model_num_layers=2,
+        model_num_hid=64,
+        max_rnd=1e8,
+        sde_ctrl_noise=None,
+        sde_ctrl_dropout=None,
+        use_tanh_bijection=True,
+        clip_prior_to_bounds=False,
+        process_type="vp",
+        diff_coeff_sq_min=0.1,
+        diff_coeff_sq_max=10.0,
+        scale_diff_coeff=1.0,
+        sigma_const=1.0,
+        terminal_t=1.0,
+        train_steps_per_update=1,
+    )
+
+    def __post_init__(self):
+        self.sampler_kwargs = dict(self.sampler_kwargs)
+        self.sampler_kwargs["batch_size"] = int(self.dr_update_batch_size)
+
+
+@configclass
 class ForgeTaskNutThreadCfg(ForgeEnvCfg):
     task_name = "nut_thread"
     task = ForgeNutThread()
     episode_length_s = 30.0
+
+
+@configclass
+class ForgeTaskNutThread_GBS_Cfg(ForgeTaskNutThreadCfg):
+    sampler_class = GBS
+    sampler_kwargs = dict(
+        beta=1.0,
+        batch_size=1024,
+        init_std=1.0,
+        lr=1e-4,
+        clip_grad=1.0,
+        num_steps=32,
+        model_num_layers=2,
+        model_num_hid=64,
+        max_rnd=1e8,
+        sde_ctrl_noise=None,
+        sde_ctrl_dropout=None,
+        use_tanh_bijection=True,
+        clip_prior_to_bounds=False,
+        process_type="vp",
+        diff_coeff_sq_min=0.1,
+        diff_coeff_sq_max=10.0,
+        scale_diff_coeff=1.0,
+        sigma_const=1.0,
+        terminal_t=1.0,
+        train_steps_per_update=1,
+    )
+
+    def __post_init__(self):
+        self.sampler_kwargs = dict(self.sampler_kwargs)
+        self.sampler_kwargs["batch_size"] = int(self.dr_update_batch_size)

@@ -67,6 +67,15 @@ gym.register(
     },
 )
 gym.register(
+    id="Custom-Factory-PegInsert-Direct-GBS-v0",
+    entry_point=f"{__name__}.factory_env:FactoryEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.factory_env_cfg:FactoryTaskPegInsert_GBS_Cfg",
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+    },
+)
+gym.register(
     id="Custom-Factory-GearMesh-Direct-v0",
     entry_point=f"{__name__}.factory_env:FactoryEnv",
     disable_env_checker=True,
@@ -103,6 +112,15 @@ gym.register(
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
     },
 )
+gym.register(
+    id="Custom-Factory-GearMesh-Direct-GBS-v0",
+    entry_point=f"{__name__}.factory_env:FactoryEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.factory_env_cfg:FactoryTaskGearMesh_GBS_Cfg",
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+    },
+)
 
 gym.register(
     id="Custom-Factory-NutThread-Direct-v0",
@@ -110,6 +128,15 @@ gym.register(
     disable_env_checker=True,
     kwargs={
         "env_cfg_entry_point": f"{__name__}.factory_env_cfg:FactoryTaskNutThreadCfg",
+        "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
+    },
+)
+gym.register(
+    id="Custom-Factory-NutThread-Direct-GBS-v0",
+    entry_point=f"{__name__}.factory_env:FactoryEnv",
+    disable_env_checker=True,
+    kwargs={
+        "env_cfg_entry_point": f"{__name__}.factory_env_cfg:FactoryTaskNutThread_GBS_Cfg",
         "rl_games_cfg_entry_point": f"{agents.__name__}:rl_games_ppo_cfg.yaml",
     },
 )

@@ -15,6 +15,7 @@ from isaaclab.utils import configclass
 from rsdr_isaaclab.tasks.direct.samplers.sampler import LearnableSampler
 from rsdr_isaaclab.tasks.direct.samplers.sampler import UDR, ADR, NoDR, DORAEMON, GOFLOW
 from rsdr_isaaclab.tasks.direct.samplers.gmm_sampler import GMMVI
+from rsdr_isaaclab.tasks.direct.samplers.gbs_sampler import GBS
 
 from .factory_tasks_cfg import ASSET_DIR, FactoryTask, GearMesh, NutThread, PegInsert
 from .randomization_cfg import FactoryRandomizationCfg
@@ -251,6 +252,37 @@ class FactoryTaskPegInsert_GMMVI_Cfg(FactoryTaskPegInsertCfg):
         self.sampler_kwargs = dict(self.sampler_kwargs)
         self.sampler_kwargs["num_envs"] = int(self.scene.num_envs)
         self.sampler_kwargs["batch_size"] = int(self.dr_update_batch_size)
+
+
+@configclass
+class FactoryTaskPegInsert_GBS_Cfg(FactoryTaskPegInsertCfg):
+    sampler_class = GBS
+    sampler_kwargs = dict(
+        beta=1.0,
+        batch_size=1024,
+        init_std=1.0,
+        lr=1e-4,
+        clip_grad=1.0,
+        num_steps=32,
+        model_num_layers=2,
+        model_num_hid=64,
+        max_rnd=1e8,
+        sde_ctrl_noise=None,
+        sde_ctrl_dropout=None,
+        use_tanh_bijection=True,
+        clip_prior_to_bounds=False,
+        process_type="vp",
+        diff_coeff_sq_min=0.1,
+        diff_coeff_sq_max=10.0,
+        scale_diff_coeff=1.0,
+        sigma_const=1.0,
+        terminal_t=1.0,
+        train_steps_per_update=1,
+    )
+
+    def __post_init__(self):
+        self.sampler_kwargs = dict(self.sampler_kwargs)
+        self.sampler_kwargs["batch_size"] = int(self.dr_update_batch_size)
 @configclass
 class FactoryTaskGearMeshCfg(FactoryEnvCfg):
     task_name = "gear_mesh"
@@ -279,6 +311,37 @@ class FactoryTaskGearMesh_DORAEMON_Cfg(FactoryTaskGearMeshCfg):
         init_beta_param=100.0,
         success_rate_condition=0.5,
     )
+
+
+@configclass
+class FactoryTaskGearMesh_GBS_Cfg(FactoryTaskGearMeshCfg):
+    sampler_class = GBS
+    sampler_kwargs = dict(
+        beta=1.0,
+        batch_size=1024,
+        init_std=1.0,
+        lr=1e-4,
+        clip_grad=1.0,
+        num_steps=32,
+        model_num_layers=2,
+        model_num_hid=64,
+        max_rnd=1e8,
+        sde_ctrl_noise=None,
+        sde_ctrl_dropout=None,
+        use_tanh_bijection=True,
+        clip_prior_to_bounds=False,
+        process_type="vp",
+        diff_coeff_sq_min=0.1,
+        diff_coeff_sq_max=10.0,
+        scale_diff_coeff=1.0,
+        sigma_const=1.0,
+        terminal_t=1.0,
+        train_steps_per_update=1,
+    )
+
+    def __post_init__(self):
+        self.sampler_kwargs = dict(self.sampler_kwargs)
+        self.sampler_kwargs["batch_size"] = int(self.dr_update_batch_size)
 
 @configclass
 class FactoryTaskNutThreadCfg(FactoryEnvCfg):
@@ -309,3 +372,34 @@ class FactoryTaskNutThread_DORAEMON_Cfg(FactoryTaskNutThreadCfg):
         init_beta_param=100.0,
         success_rate_condition=0.6,
     )
+
+
+@configclass
+class FactoryTaskNutThread_GBS_Cfg(FactoryTaskNutThreadCfg):
+    sampler_class = GBS
+    sampler_kwargs = dict(
+        beta=1.0,
+        batch_size=1024,
+        init_std=1.0,
+        lr=1e-4,
+        clip_grad=1.0,
+        num_steps=32,
+        model_num_layers=2,
+        model_num_hid=64,
+        max_rnd=1e8,
+        sde_ctrl_noise=None,
+        sde_ctrl_dropout=None,
+        use_tanh_bijection=True,
+        clip_prior_to_bounds=False,
+        process_type="vp",
+        diff_coeff_sq_min=0.1,
+        diff_coeff_sq_max=10.0,
+        scale_diff_coeff=1.0,
+        sigma_const=1.0,
+        terminal_t=1.0,
+        train_steps_per_update=1,
+    )
+
+    def __post_init__(self):
+        self.sampler_kwargs = dict(self.sampler_kwargs)
+        self.sampler_kwargs["batch_size"] = int(self.dr_update_batch_size)
