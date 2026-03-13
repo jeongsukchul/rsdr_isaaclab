@@ -47,6 +47,18 @@ def tanh_box_logabsdet(z: jax.Array, low: jax.Array, high: jax.Array) -> jax.Arr
     return jnp.sum(jnp.log(jnp.clip(jac_diag, 1e-12)), axis=-1)
 
 
+def gbs_sample_log_prob(
+    x0: jax.Array,
+    rnd_running: jax.Array,
+    prior_log_prob,
+    logabsdet: jax.Array | None = None,
+) -> jax.Array:
+    log_prob = prior_log_prob(x0) + rnd_running
+    if logabsdet is not None:
+        log_prob = log_prob - logabsdet
+    return log_prob
+
+
 class GBS(LearnableSampler):
     def __init__(
         self,
@@ -93,6 +105,8 @@ class GBS(LearnableSampler):
         self.train_steps_per_update = max(1, int(train_steps_per_update))
         self.current_dist = None
         self.last_aux: dict[str, float] = {}
+        self._last_sample_contexts: torch.Tensor | None = None
+        self._last_sample_log_probs: torch.Tensor | None = None
 
         self.low_jax = torch_to_jax(self.low)
         self.high_jax = torch_to_jax(self.high)
@@ -240,7 +254,7 @@ class GBS(LearnableSampler):
     def _latent_samples(self, num_samples: int):
         self.rng, sample_key = jax.random.split(self.rng)
         sampler_jit = self._get_sampler_jit(num_samples)
-        _, latent_samples, rnd_running = sampler_jit(
+        x0, latent_samples, rnd_running = sampler_jit(
             sample_key,
             self.flow_state,
             self.fwd_state.params,
@@ -253,12 +267,27 @@ class GBS(LearnableSampler):
             self.sde_ctrl_dropout,
             self.process_center,
         )
-        return latent_samples, rnd_running
+        return x0, latent_samples, rnd_running
 
     def sample_model(self, num_samples: int) -> torch.Tensor:
-        latent_samples, _ = self._latent_samples(num_samples)
+        x0, latent_samples, rnd_running = self._latent_samples(num_samples)
         samples = self._latent_to_box(latent_samples)
-        return jax_to_torch(samples).to(device=self.device, dtype=torch.float32)
+        logabsdet = (
+            tanh_box_logabsdet(latent_samples, self.low_jax, self.high_jax)
+            if self.use_tanh_bijection
+            else None
+        )
+        log_probs = gbs_sample_log_prob(
+            x0=x0,
+            rnd_running=rnd_running,
+            prior_log_prob=self.prior.log_prob,
+            logabsdet=logabsdet,
+        )
+        samples_torch = jax_to_torch(samples).to(device=self.device, dtype=torch.float32)
+        log_probs_torch = jax_to_torch(log_probs).to(device=self.device, dtype=torch.float32)
+        self._last_sample_contexts = samples_torch.detach().clone()
+        self._last_sample_log_probs = log_probs_torch.detach().clone()
+        return samples_torch
 
     def sample(self, num_samples: int) -> torch.Tensor:
         return self.sample_model(num_samples)
@@ -271,8 +300,18 @@ class GBS(LearnableSampler):
 
     def log_prob(self, value: torch.Tensor) -> torch.Tensor:
         value = value.to(device=self.device, dtype=torch.float32)
-        batch = 1 if value.ndim == 1 else value.shape[0]
-        return torch.zeros(batch, device=value.device, dtype=value.dtype)
+        batch_value = value.unsqueeze(0) if value.ndim == 1 else value
+        if (
+            self._last_sample_contexts is not None
+            and self._last_sample_log_probs is not None
+            and batch_value.shape == self._last_sample_contexts.shape
+            and torch.allclose(batch_value, self._last_sample_contexts, atol=1e-6, rtol=1e-5)
+        ):
+            result = self._last_sample_log_probs.to(device=value.device, dtype=value.dtype)
+            return result[0] if value.ndim == 1 else result
+
+        batch = batch_value.shape[0]
+        return torch.full((batch,), float("nan"), device=value.device, dtype=value.dtype)
 
     def log_prob_batch(self, values: torch.Tensor) -> torch.Tensor:
         return self.log_prob(values)
