@@ -260,7 +260,7 @@ class FactoryTaskPegInsert_GBS_Cfg(FactoryTaskPegInsertCfg):
     sampler_kwargs = dict(
         beta=1.0,
         batch_size=1024,
-        init_std=1.0,
+        init_std=.5,
         lr=1e-4,
         clip_grad=1.0,
         num_steps=32,
