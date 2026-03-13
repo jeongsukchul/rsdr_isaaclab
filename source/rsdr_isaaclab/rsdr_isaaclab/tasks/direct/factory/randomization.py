@@ -48,6 +48,22 @@ def _broadcast_multiplier(vals: torch.Tensor, target_width: int) -> torch.Tensor
     return vals.mean(dim=1, keepdim=True).repeat(1, target_width)
 
 
+def _resolve_gripper_body_ids(env, asset) -> torch.Tensor:
+    """Resolve Franka gripper bodies from runtime body names."""
+    candidate_names = ("panda_hand", "panda_leftfinger", "panda_rightfinger")
+    body_name_to_idx = {name: idx for idx, name in enumerate(asset.body_names)}
+    body_ids = [body_name_to_idx[name] for name in candidate_names if name in body_name_to_idx]
+    if not body_ids:
+        fallback_ids = []
+        for attr_name in ("left_finger_body_idx", "right_finger_body_idx"):
+            if hasattr(env, attr_name):
+                fallback_ids.append(int(getattr(env, attr_name)))
+        body_ids = fallback_ids
+    if not body_ids:
+        raise RuntimeError("Could not resolve gripper body ids for mass randomization.")
+    return torch.tensor(body_ids, device=env.device, dtype=torch.long)
+
+
 def randomize_actuator_gain(env, vals):
     if vals is None:
         return
@@ -59,11 +75,18 @@ def randomize_actuator_gain(env, vals):
 def randomize_mass(env, env_ids, asset_name: str, values: torch.Tensor, body_ids=None):
     """Set mass = default_mass * values for selected bodies."""
     asset = _get_articulation(env, asset_name)
+    env_ids_cpu = env_ids.to(device="cpu", dtype=torch.long)
     if body_ids is None:
-        body_ids = torch.arange(asset.num_bodies, device=env.device)
+        body_ids = torch.arange(asset.num_bodies, device="cpu", dtype=torch.long)
+    elif not torch.is_tensor(body_ids):
+        body_ids = torch.tensor(body_ids, device="cpu", dtype=torch.long)
+    else:
+        body_ids = body_ids.to(device="cpu", dtype=torch.long)
 
-    masses = asset.root_physx_view.get_masses().clone()
-    default = asset.data.default_mass[env_ids[:, None], body_ids]  # (N, nbodies)
+    masses = asset.root_physx_view.get_masses().clone().to(device="cpu")
+    default_mass = asset.data.default_mass.detach().to(device="cpu")
+    default = default_mass[env_ids_cpu[:, None], body_ids]  # (N, nbodies)
+    values = values.to(device="cpu", dtype=default.dtype)
 
     # Broadcast values
     if values.dim() == 1:
@@ -74,8 +97,8 @@ def randomize_mass(env, env_ids, asset_name: str, values: torch.Tensor, body_ids
         # fallback scalar mean
         values = values.mean(dim=1, keepdim=True).repeat(1, default.shape[1])
 
-    masses[env_ids[:, None], body_ids] = default * values
-    asset.root_physx_view.set_masses(masses, env_ids)
+    masses[env_ids_cpu[:, None], body_ids] = default * values
+    asset.root_physx_view.set_masses(masses, env_ids_cpu)
     
 
 def apply_learned_randomization(env, env_ids=None):
@@ -133,7 +156,10 @@ def apply_learned_randomization(env, env_ids=None):
         # elif p_cfg.event_type == "damping":
         #     damping_val = vals
         elif p_cfg.event_type == "mass":
-            randomize_mass(env, env_ids, p_cfg.target_asset, vals, p_cfg.target_indices)
+            body_ids = p_cfg.target_indices
+            if p_cfg.name == "gripper_mass" and p_cfg.target_asset == "robot":
+                body_ids = _resolve_gripper_body_ids(env, env._robot)
+            randomize_mass(env, env_ids, p_cfg.target_asset, vals, body_ids)
         elif p_cfg.event_type == "gravity":
             gravity_val = vals
         elif p_cfg.event_type == "robot_friction":

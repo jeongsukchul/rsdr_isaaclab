@@ -243,9 +243,14 @@ class FactoryTaskPegInsert_GMMVI_Cfg(FactoryTaskPegInsertCfg):
     sampler_class = GMMVI
     sampler_kwargs = dict(
         beta=1.,
-        num_envs=1024,
+        num_envs=128,
         batch_size=1024,
     )
+
+    def __post_init__(self):
+        self.sampler_kwargs = dict(self.sampler_kwargs)
+        self.sampler_kwargs["num_envs"] = int(self.scene.num_envs)
+        self.sampler_kwargs["batch_size"] = int(self.dr_update_batch_size)
 @configclass
 class FactoryTaskGearMeshCfg(FactoryEnvCfg):
     task_name = "gear_mesh"

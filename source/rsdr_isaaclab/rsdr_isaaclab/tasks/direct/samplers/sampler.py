@@ -327,7 +327,7 @@ def render_pairwise_marginal_image(
     samples: torch.Tensor | None = None,
     eval_samples: torch.Tensor | None = None,
     dims: Sequence[int] | None = None,
-    max_scatter_points: int = 1024,
+    max_scatter_points: int = 300,
     marginal_mc_samples: int = 64,
     num_grid: int = 80,
 ):
@@ -352,6 +352,9 @@ def render_pairwise_marginal_image(
         return None
 
     context_source = context_source.to(device=sampler.device, dtype=torch.float32)
+    samples = samples.to(device=sampler.device, dtype=torch.float32) if samples is not None else None
+    eval_samples = eval_samples.to(device=sampler.device, dtype=torch.float32) if eval_samples is not None else None
+
     context_samples = _subsample_points_torch(context_source, marginal_mc_samples, seed=123)
     samples_plot = _subsample_points_torch(samples, max_scatter_points, seed=0) if samples is not None else None
     eval_samples_plot = _subsample_points_torch(eval_samples, max_scatter_points, seed=1) if eval_samples is not None else None
@@ -361,7 +364,7 @@ def render_pairwise_marginal_image(
 
     k = len(dims)
     fig, axes = plt.subplots(k, k, figsize=(3.5 * k, 3.5 * k), squeeze=False)
-    fig.subplots_adjust(wspace=0.15, hspace=0.15)
+    fig.subplots_adjust(right=0.88, wspace=0.15, hspace=0.15)
     mappable = None
 
     for row, dim_i in enumerate(dims):
@@ -413,10 +416,10 @@ def render_pairwise_marginal_image(
                     s_np[:, dim_j],
                     s_np[:, dim_i],
                     c="r",
-                    alpha=0.35,
+                    alpha=0.5,
                     marker="x",
                     s=18,
-                    label="samples" if (row == 1 and col == 0) else None,
+                    label="samples" if (row == min(1, k - 1) and col == 0) else None,
                 )
             if eval_samples_plot is not None:
                 e_np = eval_samples_plot.detach().cpu().numpy()
@@ -424,16 +427,16 @@ def render_pairwise_marginal_image(
                     e_np[:, dim_j],
                     e_np[:, dim_i],
                     c="b",
-                    alpha=0.35,
+                    alpha=0.5,
                     marker="x",
                     s=18,
-                    label="eval_samples" if (row == 1 and col == 0) else None,
+                    label="eval_samples" if (row == min(1, k - 1) and col == 0) else None,
                 )
 
             ax.set_xlim(float(low[dim_j]), float(high[dim_j]))
             ax.set_ylim(float(low[dim_i]), float(high[dim_i]))
-            ax.xaxis.set_major_locator(MaxNLocator(nbins=6))
-            ax.yaxis.set_major_locator(MaxNLocator(nbins=6))
+            ax.xaxis.set_major_locator(MaxNLocator(nbins=10, prune=None))
+            ax.yaxis.set_major_locator(MaxNLocator(nbins=10, prune=None))
             if row == k - 1:
                 ax.set_xlabel(f"dim {dim_j}")
             else:
@@ -449,7 +452,14 @@ def render_pairwise_marginal_image(
 
     handles, labels = axes[min(1, k - 1), 0].get_legend_handles_labels()
     if handles:
-        fig.legend(handles, labels, loc="upper right", frameon=True)
+        fig.legend(
+            handles,
+            labels,
+            loc="center left",
+            bbox_to_anchor=(0.90, 0.5),
+            frameon=True,
+            borderaxespad=0.0,
+        )
 
     fig.canvas.draw()
     image = np.asarray(fig.canvas.buffer_rgba(), dtype=np.uint8)[..., :3].copy()

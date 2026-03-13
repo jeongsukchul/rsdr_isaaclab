@@ -143,7 +143,7 @@ class IsaacWandbAlgoObserver(AlgoObserver):
         #                 ep_info[key] = torch.Tensor([ep_info[key]])
         #             if len(ep_info[key].shape) == 0:
         #                 ep_info[key] = ep_info[key].unsqueeze(0)
-        #             info_tensor = torch.cat((info_tensor, ep_info[key].to(self.algo.device)))
+        #             info_tensor = torch.cat((info_tensor, ep_info[key].to(  self.algo.device)))
         #         value = torch.mean(info_tensor)
         #         self.writer.add_scalar("Episode/" + key, value, epoch_num)
         #     self.ep_infos.clear()

@@ -44,8 +44,7 @@ class FactoryEnv(DirectRLEnv):
         self._uniform_eval = False
         self._first_reset = True
         cfg_batch = int(getattr(cfg, "dr_update_batch_size", 0))
-        kw_batch = int(getattr(cfg, "sampler_kwargs", {}).get("batch_size", 0))
-        self._dr_update_batch_size = int(max(1, cfg_batch if cfg_batch > 0 else (kw_batch if kw_batch > 0 else self.num_envs)))
+        self._dr_update_batch_size = cfg_batch
         self._dr_ctx_buffer = torch.empty((0, self.sampler.num_params), dtype=torch.float32, device=self.device)
         self._dr_ret_buffer = torch.empty((0,), dtype=torch.float32, device=self.device)
         self._dr_map_buffer = torch.empty((0,), dtype=torch.int32, device=self.device)
@@ -506,16 +505,16 @@ class FactoryEnv(DirectRLEnv):
         print("RESET IDX called, uniform_eval=", self._uniform_eval,
           "num_env_ids=", 0 if env_ids is None else len(env_ids))
         super()._reset_idx(env_ids)
-        check_rot = self.cfg_task.name == "nut_thread"
-        curr_successes = self._get_curr_successes(
-            success_threshold=self.cfg_task.success_threshold, check_rot=check_rot
-        )
-        success_rate = torch.count_nonzero(curr_successes) / self.num_envs
-        contexts = self.dr_context.detach()
-        returns = self.ep_return.detach()
-        scaled_returns = returns / self.max_episode_length * self.cfg.task.reward_scale
 
         if not self._first_reset:
+            check_rot = self.cfg_task.name == "nut_thread"
+            curr_successes = self._get_curr_successes(
+                success_threshold=self.cfg_task.success_threshold, check_rot=check_rot
+            )
+            success_rate = torch.count_nonzero(curr_successes) / self.num_envs
+            contexts = self.dr_context.detach()
+            returns = self.ep_return.detach()
+            scaled_returns = returns / self.max_episode_length * self.cfg.task.reward_scale
             if not self._uniform_eval:
                 if self.sampler.name == "DORAEMON" or self.sampler.name == "ADR":
                     self.sampler.update(contexts, curr_successes)
