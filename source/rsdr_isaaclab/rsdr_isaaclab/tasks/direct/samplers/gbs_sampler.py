@@ -67,9 +67,9 @@ class GBS(LearnableSampler):
         beta: float = 1.0,
         batch_size: int = 1024,
         init_std: float = 1.0,
-        lr: float = 1e-4,
+        lr: float = 1e-3,
         clip_grad: float = 1.0,
-        num_steps: int = 32,
+        num_steps: int = 100,
         model_num_layers: int = 2,
         model_num_hid: int = 64,
         max_rnd: float = 1e8,
@@ -201,9 +201,6 @@ class GBS(LearnableSampler):
         return self._sampler_fns[batch_size]
 
     def _get_train_step_jit(self, batch_size: int):
-        batch_size = int(batch_size)
-        if batch_size in self._train_step_fns:
-            return self._train_step_fns[batch_size]
 
         prior_log_prob = self.prior.log_prob
         prior_sampler = self.prior_sampler
@@ -248,7 +245,6 @@ class GBS(LearnableSampler):
             new_bwd_state = bwd_state.apply_gradients(grads=bwd_grads)
             return new_fwd_state, new_bwd_state, aux
 
-        self._train_step_fns[batch_size] = train_step_jit
         return train_step_jit
 
     def _latent_samples(self, num_samples: int):
@@ -272,21 +268,8 @@ class GBS(LearnableSampler):
     def sample_model(self, num_samples: int) -> torch.Tensor:
         x0, latent_samples, rnd_running = self._latent_samples(num_samples)
         samples = self._latent_to_box(latent_samples)
-        logabsdet = (
-            tanh_box_logabsdet(latent_samples, self.low_jax, self.high_jax)
-            if self.use_tanh_bijection
-            else None
-        )
-        log_probs = gbs_sample_log_prob(
-            x0=x0,
-            rnd_running=rnd_running,
-            prior_log_prob=self.prior.log_prob,
-            logabsdet=logabsdet,
-        )
         samples_torch = jax_to_torch(samples).to(device=self.device, dtype=torch.float32)
-        log_probs_torch = jax_to_torch(log_probs).to(device=self.device, dtype=torch.float32)
-        self._last_sample_contexts = samples_torch.detach().clone()
-        self._last_sample_log_probs = log_probs_torch.detach().clone()
+
         return samples_torch
 
     def sample(self, num_samples: int) -> torch.Tensor:
@@ -317,13 +300,11 @@ class GBS(LearnableSampler):
         return self.log_prob(values)
 
     def update(self, contexts, returns):
-        del contexts
         returns = returns.reshape(-1).to(device=self.device, dtype=torch.float32)
         target_lnpdf = torch_to_jax(returns) * self.beta
         batch_size = int(target_lnpdf.shape[0])
         train_step_jit = self._get_train_step_jit(batch_size)
 
-        aux = None
         for _ in range(self.train_steps_per_update):
             self.rng, sample_key = jax.random.split(self.rng)
             self.fwd_state, self.bwd_state, aux = train_step_jit(
@@ -332,6 +313,3 @@ class GBS(LearnableSampler):
                 self.bwd_state,
                 target_lnpdf,
             )
-
-        if aux is not None:
-            self.last_aux = {k: float(v) for k, v in jax.device_get(aux).items()}

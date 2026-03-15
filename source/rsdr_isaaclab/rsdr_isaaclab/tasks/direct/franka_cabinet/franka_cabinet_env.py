@@ -24,6 +24,7 @@ from isaaclab.utils.assets import ISAAC_NUCLEUS_DIR, ISAACLAB_NUCLEUS_DIR
 from isaaclab.utils.math import sample_uniform
 from .randomization_cfg import FrankaCabinetRandomizationCfg
 from . import randomization as dr_randomization
+from rsdr_isaaclab.tasks.direct.samplers.gbs_sampler import GBS
 from rsdr_isaaclab.tasks.direct.samplers.gmm_sampler import GMMVI
 from rsdr_isaaclab.tasks.direct.samplers.sampler import LearnableSampler, UDR, ADR, NoDR, DORAEMON, GOFLOW
 
@@ -177,6 +178,36 @@ class FrankaCabinetEnvGMMVICfg(FrankaCabinetEnvCfg):
     sampler_class: Type[LearnableSampler] = GMMVI
     sampler_kwargs = dict(beta=1.0, num_envs=1024, batch_size=1024)
     dr_update_batch_size: int = 1024
+
+@configclass
+class FrankaCabinetEnvGBSCfg(FrankaCabinetEnvCfg):
+    sampler_class: Type[LearnableSampler] = GBS
+    sampler_kwargs = dict(
+        beta=1.0,
+        batch_size=1024,
+        init_std=0.5,
+        lr=1e-4,
+        clip_grad=1.0,
+        num_steps=32,
+        model_num_layers=2,
+        model_num_hid=64,
+        max_rnd=1e8,
+        sde_ctrl_noise=None,
+        sde_ctrl_dropout=None,
+        use_tanh_bijection=True,
+        clip_prior_to_bounds=False,
+        process_type="vp",
+        diff_coeff_sq_min=0.1,
+        diff_coeff_sq_max=10.0,
+        scale_diff_coeff=1.0,
+        sigma_const=1.0,
+        terminal_t=1.0,
+        train_steps_per_update=1,
+    )
+
+    def __post_init__(self):
+        self.sampler_kwargs = dict(self.sampler_kwargs)
+        self.sampler_kwargs["batch_size"] = int(self.dr_update_batch_size)
 
 @configclass
 class FrankaCabinetEnvNoDRCfg(FrankaCabinetEnvCfg):

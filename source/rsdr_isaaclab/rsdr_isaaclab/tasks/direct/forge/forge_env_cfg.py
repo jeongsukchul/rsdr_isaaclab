@@ -142,7 +142,7 @@ class ForgeTaskPegInsert_GBS_Cfg(ForgeTaskPegInsertCfg):
     sampler_kwargs = dict(
         beta=1.0,
         batch_size=1024,
-        init_std=1.0,
+        init_std=0.5,
         lr=1e-4,
         clip_grad=1.0,
         num_steps=32,
@@ -180,7 +180,7 @@ class ForgeTaskGearMesh_GBS_Cfg(ForgeTaskGearMeshCfg):
     sampler_kwargs = dict(
         beta=1.0,
         batch_size=1024,
-        init_std=1.0,
+        init_std=0.5,
         lr=1e-4,
         clip_grad=1.0,
         num_steps=32,
@@ -218,7 +218,7 @@ class ForgeTaskNutThread_GBS_Cfg(ForgeTaskNutThreadCfg):
     sampler_kwargs = dict(
         beta=1.0,
         batch_size=1024,
-        init_std=1.0,
+        init_std=0.5,
         lr=1e-4,
         clip_grad=1.0,
         num_steps=32,

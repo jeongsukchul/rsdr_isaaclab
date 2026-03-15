@@ -175,7 +175,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # log_dir = agent_cfg["params"]["config"].get("full_experiment_name", datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
     seed = agent_cfg["params"]["seed"]
     log_dir = f"{args_cli.task}-rl_games-seed={seed}"
-    if "GMMVI" in args_cli.task:
+    if "GMMVI" or "GBS" in args_cli.task:
         log_dir += f"-beta={args_cli.beta}"
     elif "GOFLOW" in args_cli.task:
         log_dir += f"-beta={1/args_cli.alpha}-gamma={args_cli.beta}"
@@ -298,7 +298,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         exp_name = exp_name.split("Factory-")[-1]
         sampler_name = env.unwrapped.sampler.name if hasattr(env.unwrapped, "sampler") and env.unwrapped.sampler is not None else "no_sampler"
         group_name = f"{exp_name}_{sampler_name}"
-        if sampler_name == "GMMVI":
+        if sampler_name == "GMMVI" or "GBS":
             group_name += f"-beta={env.unwrapped.sampler.beta}"
         elif sampler_name == "GOFLOW":
             group_name += f"-beta={1/env.unwrapped.sampler.alpha}-gamma={env.unwrapped.sampler.beta}"
