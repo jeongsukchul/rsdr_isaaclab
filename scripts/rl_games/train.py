@@ -175,7 +175,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
     # log_dir = agent_cfg["params"]["config"].get("full_experiment_name", datetime.now().strftime("%Y-%m-%d_%H-%M-%S"))
     seed = agent_cfg["params"]["seed"]
     log_dir = f"{args_cli.task}-rl_games-seed={seed}"
-    if "GMMVI" or "GBS" in args_cli.task:
+    if "GMMVI" in args_cli.task or "GBS" in args_cli.task:
         log_dir += f"-beta={args_cli.beta}"
     elif "GOFLOW" in args_cli.task:
         log_dir += f"-beta={1/args_cli.alpha}-gamma={args_cli.beta}"
