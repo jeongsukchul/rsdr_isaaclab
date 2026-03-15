@@ -298,7 +298,7 @@ def main(env_cfg: ManagerBasedRLEnvCfg | DirectRLEnvCfg | DirectMARLEnvCfg, agen
         exp_name = exp_name.split("Factory-")[-1]
         sampler_name = env.unwrapped.sampler.name if hasattr(env.unwrapped, "sampler") and env.unwrapped.sampler is not None else "no_sampler"
         group_name = f"{exp_name}_{sampler_name}"
-        if sampler_name == "GMMVI" or "GBS":
+        if sampler_name == "GMMVI" or sampler_name == "GBS":
             group_name += f"-beta={env.unwrapped.sampler.beta}"
         elif sampler_name == "GOFLOW":
             group_name += f"-beta={1/env.unwrapped.sampler.alpha}-gamma={env.unwrapped.sampler.beta}"
