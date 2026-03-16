@@ -53,7 +53,7 @@ class FactoryRandomizationCfg:
                 # Stiffness (7 DoF)
                 RandomizationParamCfg(
                     name="stiffness", size=6, sampler_type="uniform",
-                    hard_bounds=([0.25]*6, [4.]*6), 
+                    hard_bounds=([0.4]*6, [2.3]*6), 
                     init_params=([1.]*6), # Start near nominal
                     event_type="stiffness", target_asset="robot", #visualize=True
                 ),
