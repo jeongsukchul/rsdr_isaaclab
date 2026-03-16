@@ -53,7 +53,7 @@ class FactoryRandomizationCfg:
                 # Stiffness (7 DoF)
                 RandomizationParamCfg(
                     name="stiffness", size=6, sampler_type="uniform",
-                    hard_bounds=([0.5]*6, [2.]*6), 
+                    hard_bounds=([0.25]*6, [4.]*6), 
                     init_params=([1.]*6), # Start near nominal
                     event_type="stiffness", target_asset="robot", #visualize=True
                 ),
@@ -64,12 +64,7 @@ class FactoryRandomizationCfg:
                     init_params=([0.75]),
                     event_type="friction", target_asset="robot", #visualize=True
                 ),
-                RandomizationParamCfg(
-                    name="gripper_mass", size=1, sampler_type="uniform",
-                    hard_bounds=([0.1], [10.0]),
-                    init_params=([1.0]),
-                    event_type="mass", target_asset="robot", #visualize=True
-                ),
+
                 RandomizationParamCfg(
                     name="held_friction", size=1, sampler_type="uniform",
                     hard_bounds=([0.1], [10.0]), 
