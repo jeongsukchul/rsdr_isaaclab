@@ -277,7 +277,7 @@ class FactoryTaskPegInsert_GBS_Cfg(FactoryTaskPegInsertCfg):
         scale_diff_coeff=1.0,
         sigma_const=1.0,
         terminal_t=1.0,
-        train_steps_per_update=1,
+        train_steps_per_update=20,
     )
 
     def __post_init__(self):
