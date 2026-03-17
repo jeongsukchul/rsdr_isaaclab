@@ -260,7 +260,7 @@ class FactoryTaskPegInsert_GBS_Cfg(FactoryTaskPegInsertCfg):
     sampler_kwargs = dict(
         beta=1.0,
         batch_size=1024,
-        init_std=.5,
+        init_std=1.,
         lr=1e-4,
         clip_grad=1.0,
         num_steps=32,
@@ -272,12 +272,12 @@ class FactoryTaskPegInsert_GBS_Cfg(FactoryTaskPegInsertCfg):
         use_tanh_bijection=True,
         clip_prior_to_bounds=False,
         process_type="vp",
-        diff_coeff_sq_min=0.1,
-        diff_coeff_sq_max=10.0,
-        scale_diff_coeff=1.0,
+        diff_coeff_sq_min=0.05,
+        diff_coeff_sq_max=2.0,
+        scale_diff_coeff=.5,
         sigma_const=1.0,
-        terminal_t=1.0,
-        train_steps_per_update=20,
+        terminal_t=1.,
+        train_steps_per_update=1,
     )
 
     def __post_init__(self):
