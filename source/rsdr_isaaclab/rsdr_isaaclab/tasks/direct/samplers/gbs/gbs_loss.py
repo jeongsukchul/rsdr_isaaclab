@@ -271,11 +271,10 @@ def rnd_no_target(
     return x0, xT, log_ratio
 
 
-def rnd_time_reversal_lv_no_target(
-    key: jax.Array,
+def rnd_time_reversal_lv_from_seeds(
+    seeds: jax.Array,
     model_state,  # (fwd_state, bwd_state) but only fwd_state is used
     fwd_params,
-    batch_size: int,
     prior_sampler,  # callable: prior_sampler(key)->x0 [D]
     num_steps: int,
     process: VP | Langevin,
@@ -363,9 +362,36 @@ def rnd_time_reversal_lv_no_target(
         )
         return x0, xT, rnd_running
 
-    seeds = jax.random.split(key, batch_size)
     x0, xT, rnd_running = jax.vmap(per_sample)(seeds)
     return x0, xT, rnd_running
+
+
+def rnd_time_reversal_lv_no_target(
+    key: jax.Array,
+    model_state,  # (fwd_state, bwd_state) but only fwd_state is used
+    fwd_params,
+    batch_size: int,
+    prior_sampler,  # callable: prior_sampler(key)->x0 [D]
+    num_steps: int,
+    process: VP | Langevin,
+    stop_grad: bool = True,
+    sde_ctrl_noise: float | None = None,
+    sde_ctrl_dropout: float | None = None,
+    process_center: jax.Array | None = None,
+):
+    seeds = jax.random.split(key, batch_size)
+    return rnd_time_reversal_lv_from_seeds(
+        seeds,
+        model_state,
+        fwd_params,
+        prior_sampler,
+        num_steps,
+        process,
+        stop_grad,
+        sde_ctrl_noise,
+        sde_ctrl_dropout,
+        process_center,
+    )
 
 
 def lv_loss_from_rnd(

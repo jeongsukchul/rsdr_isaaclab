@@ -5,11 +5,10 @@ from .distributions import UniformDist, BetasDist, BoundarySamplingDist, NormFlo
 import numpy as np
 import math
 from itertools import combinations
-from typing import Sequence
+from typing import Sequence, Tuple
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
-from matplotlib.ticker import MaxNLocator
 from scipy.optimize import LinearConstraint, NonlinearConstraint, minimize, Bounds
 import time
 
@@ -276,49 +275,69 @@ def render_held_pos_noise_2d_compare_image(
     plt.close(fig)
     return image
 
+def plot_pairwise_sample_density(
+    samples: np.ndarray,
+    low: np.ndarray,
+    high: np.ndarray,
+    bins: int = 60,
+    title: str = "Pairwise sample density",
+) -> Tuple[plt.Figure, np.ndarray]:
+    samples = np.asarray(samples)
+    low = np.asarray(low)
+    high = np.asarray(high)
 
-def _subsample_points_torch(x: torch.Tensor | None, max_points: int, seed: int = 0) -> torch.Tensor | None:
-    if x is None:
-        return None
-    n = int(x.shape[0])
-    if n <= max_points:
-        return x
-    g = torch.Generator(device=x.device)
-    g.manual_seed(int(seed))
-    idx = torch.randperm(n, generator=g, device=x.device)[:max_points]
-    return x[idx]
+    if samples.ndim != 2:
+        raise ValueError(f"`samples` must be 2D, got shape {samples.shape}.")
 
+    dim = samples.shape[1]
+    fig, axes = plt.subplots(dim, dim, figsize=(3.5 * dim, 3.5 * dim))
+    if dim == 1:
+        axes = np.asarray([[axes]])
 
-def _make_2d_grid_torch(low_x: float, high_x: float, low_y: float, high_y: float, num_grid: int, device):
-    xs = torch.linspace(low_x - 0.5, high_x + 0.5, num_grid, device=device, dtype=torch.float32)
-    ys = torch.linspace(low_y - 0.5, high_y + 0.5, num_grid, device=device, dtype=torch.float32)
-    xx, yy = torch.meshgrid(xs, ys, indexing="xy")
-    return xx, yy
+    mappable = None
+    for row in range(dim):
+        for col in range(dim):
+            ax = axes[row, col]
+            if row == col:
+                ax.hist(
+                    samples[:, col],
+                    bins=bins,
+                    range=(float(low[col]), float(high[col])),
+                    color="tab:blue",
+                    alpha=0.85,
+                )
+                ax.set_xlim(float(low[col]), float(high[col]))
+            else:
+                hist, xedges, yedges = np.histogram2d(
+                    samples[:, col],
+                    samples[:, row],
+                    bins=bins,
+                    range=[
+                        [float(low[col]), float(high[col])],
+                        [float(low[row]), float(high[row])],
+                    ],
+                )
+                mappable = ax.pcolormesh(
+                    xedges, yedges, hist.T, shading="auto", cmap="viridis"
+                )
+                ax.set_xlim(float(low[col]), float(high[col]))
+                ax.set_ylim(float(low[row]), float(high[row]))
 
+            if row == dim - 1:
+                ax.set_xlabel(f"dim {col}")
+            else:
+                ax.set_xticklabels([])
 
-def _evaluate_pair_marginal_mc_torch(
-    sampler,
-    X: torch.Tensor,  # (G, G)
-    Y: torch.Tensor,  # (G, G)
-    dim_x: int,
-    dim_y: int,
-    context_samples: torch.Tensor,  # (M, D)
-) -> np.ndarray:
-    """Approximate pairwise marginal by averaging p(x_i, x_j, x_-ij) over MC contexts."""
-    g1, g2 = X.shape
-    m, d = context_samples.shape
-    n = g1 * g2
-    xy = torch.stack([X.reshape(-1), Y.reshape(-1)], dim=-1)  # (N, 2)
+            if col == 0:
+                ax.set_ylabel(f"dim {row}")
+            else:
+                ax.set_yticklabels([])
 
-    full = context_samples.unsqueeze(0).repeat(n, 1, 1)  # (N, M, D)
-    full[:, :, dim_x] = xy[:, 0].unsqueeze(1)
-    full[:, :, dim_y] = xy[:, 1].unsqueeze(1)
-    full_flat = full.reshape(n * m, d)
-    with torch.no_grad():
-        logp = sampler.log_prob_batch(full_flat) if hasattr(sampler, "log_prob_batch") else sampler.log_prob(full_flat)
-    p = torch.exp(logp).reshape(n, m)
-    p_avg = p.mean(dim=1)
-    return p_avg.reshape(g1, g2).detach().cpu().numpy()
+    if mappable is not None:
+        cbar = fig.colorbar(mappable, ax=axes, shrink=0.9, pad=0.02)
+        cbar.set_label("sample density")
+    fig.suptitle(title)
+    return fig, axes
 
 
 def render_pairwise_marginal_image(
@@ -331,136 +350,33 @@ def render_pairwise_marginal_image(
     marginal_mc_samples: int = 64,
     num_grid: int = 80,
 ):
-    """
-    Pairwise 2D visualization similar to JAX reference:
-    - diagonal: 1D histograms
-    - lower triangle: contourf of MC-averaged pairwise marginals
-    - optional scatter overlays for samples / eval_samples
-    """
+    del samples, eval_samples, max_scatter_points, marginal_mc_samples, num_grid
+
     if context_source is None or context_source.ndim != 2:
         return None
 
     d = int(context_source.shape[1])
-    if d < 2:
+    if d < 1:
         return None
 
     if dims is None:
         dims = tuple(range(d))
     else:
         dims = tuple(int(v) for v in dims if 0 <= int(v) < d)
-    if len(dims) < 2:
+    if len(dims) < 1:
         return None
 
-    context_source = context_source.to(device=sampler.device, dtype=torch.float32)
-    samples = samples.to(device=sampler.device, dtype=torch.float32) if samples is not None else None
-    eval_samples = eval_samples.to(device=sampler.device, dtype=torch.float32) if eval_samples is not None else None
+    sampled = context_source[:, dims].detach().cpu().numpy()
+    low = sampler.low[list(dims)].detach().cpu().numpy()
+    high = sampler.high[list(dims)].detach().cpu().numpy()
 
-    context_samples = _subsample_points_torch(context_source, marginal_mc_samples, seed=123)
-    samples_plot = _subsample_points_torch(samples, max_scatter_points, seed=0) if samples is not None else None
-    eval_samples_plot = _subsample_points_torch(eval_samples, max_scatter_points, seed=1) if eval_samples is not None else None
-
-    low = sampler.low.detach().cpu().numpy()
-    high = sampler.high.detach().cpu().numpy()
-
-    k = len(dims)
-    fig, axes = plt.subplots(k, k, figsize=(3.5 * k, 3.5 * k), squeeze=False)
-    fig.subplots_adjust(right=0.88, wspace=0.15, hspace=0.15)
-    mappable = None
-
-    for row, dim_i in enumerate(dims):
-        for col, dim_j in enumerate(dims):
-            ax = axes[row, col]
-            if row < col:
-                ax.axis("off")
-                continue
-            if row == col:
-                vals = context_source[:, dim_i].detach().cpu().numpy()
-                ax.hist(vals, bins=30, density=True, alpha=0.8, color="#1f77b4")
-                ax.set_xlim(float(low[dim_i]), float(high[dim_i]))
-                ax.xaxis.set_major_locator(MaxNLocator(nbins=6))
-                if row == k - 1:
-                    ax.set_xlabel(f"dim {dim_i}")
-                else:
-                    ax.set_xticklabels([])
-                ax.set_yticklabels([])
-                continue
-
-            X, Y = _make_2d_grid_torch(
-                float(low[dim_j]),
-                float(high[dim_j]),
-                float(low[dim_i]),
-                float(high[dim_i]),
-                num_grid,
-                sampler.device,
-            )
-            Z = _evaluate_pair_marginal_mc_torch(
-                sampler=sampler,
-                X=X,
-                Y=Y,
-                dim_x=dim_j,
-                dim_y=dim_i,
-                context_samples=context_samples,
-            )
-            ctf = ax.contourf(
-                X.detach().cpu().numpy(),
-                Y.detach().cpu().numpy(),
-                Z,
-                levels=20,
-                cmap="viridis",
-            )
-            mappable = ctf
-
-            if samples_plot is not None:
-                s_np = samples_plot.detach().cpu().numpy()
-                ax.scatter(
-                    s_np[:, dim_j],
-                    s_np[:, dim_i],
-                    c="r",
-                    alpha=0.5,
-                    marker="x",
-                    s=18,
-                    label="samples" if (row == min(1, k - 1) and col == 0) else None,
-                )
-            if eval_samples_plot is not None:
-                e_np = eval_samples_plot.detach().cpu().numpy()
-                ax.scatter(
-                    e_np[:, dim_j],
-                    e_np[:, dim_i],
-                    c="b",
-                    alpha=0.5,
-                    marker="x",
-                    s=18,
-                    label="eval_samples" if (row == min(1, k - 1) and col == 0) else None,
-                )
-
-            ax.set_xlim(float(low[dim_j]), float(high[dim_j]))
-            ax.set_ylim(float(low[dim_i]), float(high[dim_i]))
-            ax.xaxis.set_major_locator(MaxNLocator(nbins=10, prune=None))
-            ax.yaxis.set_major_locator(MaxNLocator(nbins=10, prune=None))
-            if row == k - 1:
-                ax.set_xlabel(f"dim {dim_j}")
-            else:
-                ax.set_xticklabels([])
-            if col == 0:
-                ax.set_ylabel(f"dim {dim_i}")
-            else:
-                ax.set_yticklabels([])
-
-    if mappable is not None:
-        cbar = fig.colorbar(mappable, ax=axes, shrink=0.9, pad=0.02)
-        cbar.set_label("MC-averaged density")
-
-    handles, labels = axes[min(1, k - 1), 0].get_legend_handles_labels()
-    if handles:
-        fig.legend(
-            handles,
-            labels,
-            loc="center left",
-            bbox_to_anchor=(0.90, 0.5),
-            frameon=True,
-            borderaxespad=0.0,
-        )
-
+    fig, _ = plot_pairwise_sample_density(
+        samples=sampled,
+        low=low,
+        high=high,
+        bins=60,
+        title=f"{sampler.name} pairwise sample density",
+    )
     fig.canvas.draw()
     image = np.asarray(fig.canvas.buffer_rgba(), dtype=np.uint8)[..., :3].copy()
     plt.close(fig)

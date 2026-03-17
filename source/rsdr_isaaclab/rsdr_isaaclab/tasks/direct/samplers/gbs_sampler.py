@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections import deque
 
 import distrax
 import jax
@@ -9,7 +10,13 @@ import optax
 import torch
 from flax.training import train_state as flax_train_state
 
-from .gbs.gbs_loss import Langevin, VP, lv_loss_from_rnd, rnd_time_reversal_lv_no_target
+from .gbs.gbs_loss import (
+    Langevin,
+    VP,
+    lv_loss_from_rnd,
+    rnd_time_reversal_lv_from_seeds,
+    rnd_time_reversal_lv_no_target,
+)
 from .gbs.gbs_trainer import PISGRADNet
 from .sampler import LearnableSampler
 
@@ -45,18 +52,6 @@ def tanh_box_logabsdet(z: jax.Array, low: jax.Array, high: jax.Array) -> jax.Arr
     half = 0.5 * (high - low)
     jac_diag = half * (1.0 - jnp.tanh(z) ** 2)
     return jnp.sum(jnp.log(jnp.clip(jac_diag, 1e-12)), axis=-1)
-
-
-def gbs_sample_log_prob(
-    x0: jax.Array,
-    rnd_running: jax.Array,
-    prior_log_prob,
-    logabsdet: jax.Array | None = None,
-) -> jax.Array:
-    log_prob = prior_log_prob(x0) + rnd_running
-    if logabsdet is not None:
-        log_prob = log_prob - logabsdet
-    return log_prob
 
 
 class GBS(LearnableSampler):
@@ -105,8 +100,8 @@ class GBS(LearnableSampler):
         self.train_steps_per_update = max(1, int(train_steps_per_update))
         self.current_dist = None
         self.last_aux: dict[str, float] = {}
-        self._last_sample_contexts: torch.Tensor | None = None
-        self._last_sample_log_probs: torch.Tensor | None = None
+        self._pending_sample_seeds: jax.Array | None = None
+        self._pending_sample_contexts: deque[torch.Tensor] = deque()
 
         self.low_jax = torch_to_jax(self.low)
         self.high_jax = torch_to_jax(self.high)
@@ -215,13 +210,12 @@ class GBS(LearnableSampler):
         process_center = self.process_center
 
         @jax.jit
-        def train_step_jit(key, fwd_state, bwd_state, target_lnpdf):
+        def train_step_jit(sample_seeds, fwd_state, bwd_state, target_lnpdf):
             def loss_from_params(fwd_params, bwd_params):
-                x0, xT, rnd_running = rnd_time_reversal_lv_no_target(
-                    key,
+                x0, xT, rnd_running = rnd_time_reversal_lv_from_seeds(
+                    sample_seeds,
                     (fwd_state, bwd_state),
                     fwd_params,
-                    batch_size,
                     prior_sampler,
                     num_steps,
                     process,
@@ -231,10 +225,12 @@ class GBS(LearnableSampler):
                     process_center,
                 )
                 target_lp_vals = target_lnpdf
+                logabsdet = None
                 if use_tanh_bijection:
                     target_lp_vals = target_lp_vals + tanh_box_logabsdet(xT, low, high)
                 rnd_total = prior_log_prob(x0) + rnd_running - target_lp_vals
-                loss, aux, _ = lv_loss_from_rnd(rnd_total, xT=xT, max_rnd=max_rnd)
+                xT_box = self._latent_to_box(xT)
+                loss, aux, _ = lv_loss_from_rnd(rnd_total, xT=xT_box, max_rnd=max_rnd)
                 return loss, aux
 
             (grads, aux) = jax.grad(loss_from_params, (0, 1), has_aux=True)(
@@ -263,12 +259,47 @@ class GBS(LearnableSampler):
             self.sde_ctrl_dropout,
             self.process_center,
         )
-        return x0, latent_samples, rnd_running
+        sample_seeds = jax.random.split(sample_key, int(num_samples))
+        return x0, latent_samples, rnd_running, sample_seeds
 
-    def sample_model(self, num_samples: int) -> torch.Tensor:
-        x0, latent_samples, rnd_running = self._latent_samples(num_samples)
+    def _append_pending_sample_metadata(self, sample_seeds: jax.Array, samples_torch: torch.Tensor):
+        if self._pending_sample_seeds is None:
+            self._pending_sample_seeds = sample_seeds
+        else:
+            self._pending_sample_seeds = jnp.concatenate([self._pending_sample_seeds, sample_seeds], axis=0)
+        self._pending_sample_contexts.append(samples_torch.detach().clone())
+
+    def _pop_pending_sample_metadata(self, batch_size: int) -> tuple[jax.Array, torch.Tensor]:
+        if self._pending_sample_seeds is None or int(self._pending_sample_seeds.shape[0]) < batch_size:
+            pending = 0 if self._pending_sample_seeds is None else int(self._pending_sample_seeds.shape[0])
+            raise RuntimeError(
+                f"GBS update requested {batch_size} trajectories, but only {pending} are buffered."
+            )
+
+        sample_seeds = self._pending_sample_seeds[:batch_size]
+        self._pending_sample_seeds = self._pending_sample_seeds[batch_size:]
+        if int(self._pending_sample_seeds.shape[0]) == 0:
+            self._pending_sample_seeds = None
+
+        context_chunks: list[torch.Tensor] = []
+        remaining = batch_size
+        while remaining > 0:
+            if not self._pending_sample_contexts:
+                raise RuntimeError("GBS sample context buffer underflow while building an update batch.")
+            chunk = self._pending_sample_contexts.popleft()
+            take = min(remaining, int(chunk.shape[0]))
+            context_chunks.append(chunk[:take])
+            if take < int(chunk.shape[0]):
+                self._pending_sample_contexts.appendleft(chunk[take:])
+            remaining -= take
+        return sample_seeds, torch.cat(context_chunks, dim=0)
+
+    def sample_model(self, num_samples: int, record_for_update: bool = False) -> torch.Tensor:
+        _, latent_samples, _, sample_seeds = self._latent_samples(num_samples)
         samples = self._latent_to_box(latent_samples)
         samples_torch = jax_to_torch(samples).to(device=self.device, dtype=torch.float32)
+        if record_for_update:
+            self._append_pending_sample_metadata(sample_seeds, samples_torch)
 
         return samples_torch
 
@@ -279,20 +310,11 @@ class GBS(LearnableSampler):
         return self.sample_model(num_samples)
 
     def get_train_sample_fn(self):
-        return lambda num_samples: self.sample_model(num_samples)
+        return lambda num_samples: self.sample_model(num_samples, record_for_update=True)
 
     def log_prob(self, value: torch.Tensor) -> torch.Tensor:
         value = value.to(device=self.device, dtype=torch.float32)
         batch_value = value.unsqueeze(0) if value.ndim == 1 else value
-        if (
-            self._last_sample_contexts is not None
-            and self._last_sample_log_probs is not None
-            and batch_value.shape == self._last_sample_contexts.shape
-            and torch.allclose(batch_value, self._last_sample_contexts, atol=1e-6, rtol=1e-5)
-        ):
-            result = self._last_sample_log_probs.to(device=value.device, dtype=value.dtype)
-            return result[0] if value.ndim == 1 else result
-
         batch = batch_value.shape[0]
         return torch.full((batch,), float("nan"), device=value.device, dtype=value.dtype)
 
@@ -300,16 +322,26 @@ class GBS(LearnableSampler):
         return self.log_prob(values)
 
     def update(self, contexts, returns):
+        contexts = contexts.to(device=self.device, dtype=torch.float32)
         returns = returns.reshape(-1).to(device=self.device, dtype=torch.float32)
+        if contexts.ndim != 2 or contexts.shape[0] != returns.shape[0]:
+            raise ValueError(
+                f"GBS.update expected contexts [B,D] aligned with returns [B], got "
+                f"contexts={tuple(contexts.shape)} returns={tuple(returns.shape)}"
+            )
         target_lnpdf = torch_to_jax(returns) * self.beta
         batch_size = int(target_lnpdf.shape[0])
         train_step_jit = self._get_train_step_jit(batch_size)
+        sample_seeds, buffered_contexts = self._pop_pending_sample_metadata(batch_size)
+
+        context_error = (buffered_contexts.to(self.device) - contexts).abs().max().item()
 
         for _ in range(self.train_steps_per_update):
-            self.rng, sample_key = jax.random.split(self.rng)
             self.fwd_state, self.bwd_state, aux = train_step_jit(
-                sample_key,
+                sample_seeds,
                 self.fwd_state,
                 self.bwd_state,
                 target_lnpdf,
             )
+        self.last_aux = {k: float(v) for k, v in aux.items()}
+        self.last_aux["train/replay_context_max_abs_err"] = float(context_error)
