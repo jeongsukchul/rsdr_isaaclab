@@ -44,27 +44,41 @@ class GMMVI(LearnableSampler):
                  **kwargs):
         super().__init__(cfg, device)
         self.name = "GMMVI"
-        bound_info = (torch_to_jax(self.low), torch_to_jax(self.high))
+        self.dist_dim = self.learning_num_params
         rng = jax.random.PRNGKey(torch.cuda.initial_seed() % (2**32))
-        self.rng, init_key = jax.random.split(rng) 
-        init_gmmvi_state, gmm_network = create_gmm_network_and_state(cfg.total_params, \
-                                                               num_envs, batch_size, init_key,\
-                                                                bound_info=bound_info)
-        self.gmmvi_state = init_gmmvi_state
-        self.gmm_network = gmm_network
-        self.update_fn = jax.jit(make_gmm_update(gmm_network))
+        self.rng, init_key = jax.random.split(rng)
+        self.gmmvi_state = None
+        self.gmm_network = None
+        self.update_fn = None
+        if self.has_learning_dims:
+            bound_info = (torch_to_jax(self.learn_low), torch_to_jax(self.learn_high))
+            init_gmmvi_state, gmm_network = create_gmm_network_and_state(
+                cfg.total_learning_params,
+                num_envs,
+                batch_size,
+                init_key,
+                bound_info=bound_info,
+            )
+            self.gmmvi_state = init_gmmvi_state
+            self.gmm_network = gmm_network
+            self.update_fn = jax.jit(make_gmm_update(gmm_network))
         self.sample_size = batch_size
         self.beta = float(beta)
-        self.current_dist= None
+        self.current_dist = None
     def get_train_sample_fn(self):
         return lambda num_samples: self.sample_model(num_samples)
 
     def sample_model(self, num_samples: int) -> tuple[torch.Tensor, torch.Tensor]:
+        if not self.has_learning_dims:
+            samples_torch = self._assemble_full_contexts(None, num_samples)
+            mapping_torch = torch.zeros((num_samples,), device=self.device, dtype=torch.int32)
+            return samples_torch, mapping_torch
         self.rng, key = jax.random.split(self.rng)
         samples_jax, mapping_jax = self.gmm_network.model.sample(
             self.gmmvi_state.model_state.gmm_state, key, num_samples
         )
-        samples_torch = jax_to_torch(samples_jax).to(device=self.device, dtype=torch.float32)
+        learned_samples_torch = jax_to_torch(samples_jax).to(device=self.device, dtype=torch.float32)
+        samples_torch = self._assemble_full_contexts(learned_samples_torch, num_samples)
         mapping_torch = jax_to_torch(mapping_jax).to(device=self.device, dtype=torch.int32)
         return samples_torch, mapping_torch
 
@@ -97,11 +111,18 @@ class GMMVI(LearnableSampler):
         samples, _ = self.sample_model(num_samples)
         return samples
     def log_prob(self, value: torch.Tensor) -> torch.Tensor:
+        if not self.has_learning_dims:
+            batch = value.shape[0] if value.ndim > 1 else 1
+            return torch.zeros((batch,), device=value.device, dtype=value.dtype)
+        value = self._project_learning_contexts(value)
         value_jax = torch_to_jax(value.to("cuda" if value.is_cuda else "cpu"))
         lp_jax = self.gmm_network.model.log_density(self.gmmvi_state.model_state.gmm_state, value_jax)
         return jax_to_torch(lp_jax).to(device=value.device)
     def log_prob_batch(self, values: torch.Tensor) -> torch.Tensor:
         """Batched log-density helper for diagnostics."""
+        if not self.has_learning_dims:
+            return torch.zeros((values.shape[0],), device=values.device, dtype=values.dtype)
+        values = self._project_learning_contexts(values)
         values = values.to(device=self.device, dtype=torch.float32)
         values_jax = torch_to_jax(values)
         lp_jax = jax.vmap(self.gmm_network.model.log_density, in_axes=(None, 0))(
@@ -109,7 +130,10 @@ class GMMVI(LearnableSampler):
         )
         return jax_to_torch(lp_jax).to(device=values.device, dtype=torch.float32)
     def update(self, samples_torch, mapping_torch, returns):
+        if not self.has_learning_dims:
+            return
 
+        samples_torch = self._project_learning_contexts(samples_torch)
         returns = returns.reshape(-1).to(device=samples_torch.device, dtype=torch.float32)
         mapping_torch = mapping_torch.reshape(-1).to(device=samples_torch.device, dtype=torch.int32)
 

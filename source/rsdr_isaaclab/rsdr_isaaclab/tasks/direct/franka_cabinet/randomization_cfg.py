@@ -15,6 +15,8 @@ class RandomizationParamCfg:
     target_asset: str
     target_indices: Optional[List[int]] = None
     indices: List[int] = field(default_factory=list)
+    learning_indices: List[int] = field(default_factory=list)
+    no_learning: bool = False
     visualize: bool = True
 
 
@@ -22,6 +24,7 @@ class RandomizationParamCfg:
 class FrankaCabinetRandomizationCfg:
     params: List[RandomizationParamCfg] = field(default_factory=list)
     total_params: int = 0
+    total_learning_params: int = 0
 
     def __post_init__(self):
         if not self.params:
@@ -69,7 +72,14 @@ class FrankaCabinetRandomizationCfg:
             ]
 
         current_idx = 0
+        current_learning_idx = 0
         for p in self.params:
             p.indices = list(range(current_idx, current_idx + p.size))
+            if p.no_learning:
+                p.learning_indices = []
+            else:
+                p.learning_indices = list(range(current_learning_idx, current_learning_idx + p.size))
+                current_learning_idx += p.size
             current_idx += p.size
         self.total_params = current_idx
+        self.total_learning_params = current_learning_idx

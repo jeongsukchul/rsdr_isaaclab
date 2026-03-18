@@ -84,6 +84,7 @@ class GBS(LearnableSampler):
     ):
         super().__init__(cfg, device)
         self.name = "GBS"
+        self.dist_dim = self.learning_num_params
         self.beta = float(beta)
         self.batch_size = int(batch_size)
         self.init_std = float(init_std)
@@ -103,9 +104,23 @@ class GBS(LearnableSampler):
         self._pending_sample_seeds: jax.Array | None = None
         self._pending_sample_contexts: deque[torch.Tensor] = deque()
 
-        self.low_jax = torch_to_jax(self.low)
-        self.high_jax = torch_to_jax(self.high)
-        self.dim = int(self.num_params)
+        self.low_jax = torch_to_jax(self.learn_low)
+        self.high_jax = torch_to_jax(self.learn_high)
+        self.dim = int(self.learning_num_params)
+
+        if not self.has_learning_dims:
+            self.current_dist = None
+            self.prior = None
+            self.prior_sampler = None
+            self.process = None
+            self.rng = None
+            self.model_fwd = None
+            self.model_bwd = None
+            self.fwd_state = None
+            self.bwd_state = None
+            self._sampler_fns: dict[int, callable] = {}
+            self._train_step_fns: dict[int, callable] = {}
+            return
 
         if self.use_tanh_bijection:
             self._latent_to_box = lambda z: tanh_box_bijector(z, self.low_jax, self.high_jax)
@@ -295,9 +310,12 @@ class GBS(LearnableSampler):
         return sample_seeds, torch.cat(context_chunks, dim=0)
 
     def sample_model(self, num_samples: int, record_for_update: bool = False) -> torch.Tensor:
+        if not self.has_learning_dims:
+            return self._assemble_full_contexts(None, num_samples)
         _, latent_samples, _, sample_seeds = self._latent_samples(num_samples)
         samples = self._latent_to_box(latent_samples)
-        samples_torch = jax_to_torch(samples).to(device=self.device, dtype=torch.float32)
+        learned_samples_torch = jax_to_torch(samples).to(device=self.device, dtype=torch.float32)
+        samples_torch = self._assemble_full_contexts(learned_samples_torch, num_samples)
         if record_for_update:
             self._append_pending_sample_metadata(sample_seeds, samples_torch)
 
@@ -313,6 +331,9 @@ class GBS(LearnableSampler):
         return lambda num_samples: self.sample_model(num_samples, record_for_update=True)
 
     def log_prob(self, value: torch.Tensor) -> torch.Tensor:
+        if not self.has_learning_dims:
+            batch = value.shape[0] if value.ndim > 1 else 1
+            return torch.zeros((batch,), device=value.device, dtype=value.dtype)
         value = value.to(device=self.device, dtype=torch.float32)
         batch_value = value.unsqueeze(0) if value.ndim == 1 else value
         batch = batch_value.shape[0]
@@ -322,6 +343,8 @@ class GBS(LearnableSampler):
         return self.log_prob(values)
 
     def update(self, contexts, returns):
+        if not self.has_learning_dims:
+            return
         contexts = contexts.to(device=self.device, dtype=torch.float32)
         returns = returns.reshape(-1).to(device=self.device, dtype=torch.float32)
         if contexts.ndim != 2 or contexts.shape[0] != returns.shape[0]:
@@ -333,6 +356,9 @@ class GBS(LearnableSampler):
         batch_size = int(target_lnpdf.shape[0])
         train_step_jit = self._get_train_step_jit(batch_size)
         sample_seeds, buffered_contexts = self._pop_pending_sample_metadata(batch_size)
+
+        contexts = self._project_learning_contexts(contexts)
+        buffered_contexts = self._project_learning_contexts(buffered_contexts)
 
         context_error = (buffered_contexts.to(self.device) - contexts).abs().max().item()
 

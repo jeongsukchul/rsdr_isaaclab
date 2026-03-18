@@ -253,7 +253,10 @@ class IsaacWandbAlgoObserver(AlgoObserver):
         env_sampled_contexts: torch.Tensor | None,
         sampler_sampled_contexts: torch.Tensor,
     ):
-        params = [p for p in sampler.cfg.params if getattr(p, "visualize", False)]
+        params = [
+            p for p in sampler.cfg.params
+            if getattr(p, "visualize", False) and not getattr(p, "no_learning", False)
+        ]
         if not params:
             return
 

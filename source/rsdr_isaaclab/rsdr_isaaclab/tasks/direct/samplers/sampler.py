@@ -17,7 +17,7 @@ def _held_pos_noise_indices_2d(sampler):
     idx = None
     for p_cfg in sampler.cfg.params:
         if p_cfg.name == "held_pos_noise":
-            local = list(p_cfg.indices)
+            local = list(getattr(p_cfg, "learning_indices", p_cfg.indices))
             # Accept >=2 dims and always project to 2D for visualization.
             # Prefer x-z style when available: [0, 2], else [0, 1].
             if len(local) >= 3:
@@ -69,13 +69,14 @@ def render_param_distribution_image(
     - size==1: histogram
     - size>=2: one subplot per pair (sizeC2 for size>2)
     """
-    idx = list(param_cfg.indices)
+    idx = list(getattr(param_cfg, "learning_indices", param_cfg.indices))
     if len(idx) == 0:
         return None
 
-    sampled = sampled_contexts[:, idx].detach().cpu().numpy()
-    low = sampler.low[idx].detach().cpu().numpy()
-    high = sampler.high[idx].detach().cpu().numpy()
+    sampled_learning = sampler._project_learning_contexts(sampled_contexts)
+    sampled = sampled_learning[:, idx].detach().cpu().numpy()
+    low = sampler.learn_low[idx].detach().cpu().numpy()
+    high = sampler.learn_high[idx].detach().cpu().numpy()
 
     if len(idx) == 1:
         fig, ax = plt.subplots(1, 1, figsize=(5.5, 3.8), dpi=120)
@@ -355,6 +356,8 @@ def render_pairwise_marginal_image(
     if context_source is None or context_source.ndim != 2:
         return None
 
+    context_source = sampler._project_learning_contexts(context_source)
+
     d = int(context_source.shape[1])
     if d < 1:
         return None
@@ -367,8 +370,8 @@ def render_pairwise_marginal_image(
         return None
 
     sampled = context_source[:, dims].detach().cpu().numpy()
-    low = sampler.low[list(dims)].detach().cpu().numpy()
-    high = sampler.high[list(dims)].detach().cpu().numpy()
+    low = sampler.learn_low[list(dims)].detach().cpu().numpy()
+    high = sampler.learn_high[list(dims)].detach().cpu().numpy()
 
     fig, _ = plot_pairwise_sample_density(
         samples=sampled,
@@ -386,23 +389,28 @@ class LearnableSampler:
         super().__init__()
         self.cfg = cfg
         self.device = device
-        self.num_params = cfg.total_params  # Total scalar parameters
-        self.name="default"
-        init = []        
+        self.num_params = cfg.total_params
+        self.learning_num_params = getattr(cfg, "total_learning_params", cfg.total_params)
+        self.name = "default"
+
+        def ensure_list(val, size):
+            if isinstance(val, (int, float)):
+                return [val] * size
+            return list(val)
+
+        init = []
         low = []
         high = []
-        
+        learn_init = []
+        learn_low = []
+        learn_high = []
+        learning_dim_indices = []
+
         for p in cfg.params:
-            # Helper to broadcast scalar to list if size > 1
-            def ensure_list(val, size):
-                if isinstance(val, (int, float)):
-                    return [val] * size
-                return val # Assume list/tuple
-            
-            p_init = ensure_list(p.init_params, p.size) # Low or Mean
+            p_init = ensure_list(p.init_params, p.size)
             p_low = ensure_list(p.hard_bounds[0], p.size)
             p_high = ensure_list(p.hard_bounds[1], p.size)
-            
+
             for i in range(p.size):
                 if abs(p_low[i] - p_high[i]) < 1e-12:
                     p_high[i] = p_low[i] + 1e-10
@@ -410,20 +418,104 @@ class LearnableSampler:
             low.extend(p_low)
             high.extend(p_high)
 
-        # Fixed Constants
+            if not getattr(p, "no_learning", False):
+                learn_init.extend(p_init)
+                learn_low.extend(p_low)
+                learn_high.extend(p_high)
+                learning_dim_indices.extend(p.indices)
+
         self.init = torch.tensor(init, device=device, dtype=torch.float32)
         self.low = torch.tensor(low, device=device, dtype=torch.float32)
         self.high = torch.tensor(high, device=device, dtype=torch.float32)
         self.mid = (self.low + self.high) / 2.0
-        self.current_dist = UniformDist(self.low, self.high, self.device)
+
+        self.learn_init = torch.tensor(learn_init, device=device, dtype=torch.float32)
+        self.learn_low = torch.tensor(learn_low, device=device, dtype=torch.float32)
+        self.learn_high = torch.tensor(learn_high, device=device, dtype=torch.float32)
+        self.learn_mid = (self.learn_low + self.learn_high) / 2.0 if self.learning_num_params > 0 else torch.empty((0,), device=device, dtype=torch.float32)
+        self.learning_dim_indices = torch.tensor(learning_dim_indices, device=device, dtype=torch.long)
+        self.has_learning_dims = self.learning_num_params > 0
+        self.dist_dim = self.learning_num_params
+        self.current_dist = UniformDist(self.learn_low, self.learn_high, self.device) if self.has_learning_dims else None
         print("Reference sampler with low:", self.low
               , "high:", self.high, "init:", self.init)
+
+    def _sample_no_learning_param(self, p_cfg, num_samples: int) -> torch.Tensor:
+        def ensure_list(val, size):
+            if isinstance(val, (int, float)):
+                return [val] * size
+            return list(val)
+
+        p_low = torch.tensor(ensure_list(p_cfg.hard_bounds[0], p_cfg.size), device=self.device, dtype=torch.float32)
+        p_high = torch.tensor(ensure_list(p_cfg.hard_bounds[1], p_cfg.size), device=self.device, dtype=torch.float32)
+        p_init = torch.tensor(ensure_list(p_cfg.init_params, p_cfg.size), device=self.device, dtype=torch.float32)
+
+        if p_cfg.sampler_type == "uniform":
+            return torch.rand((num_samples, p_cfg.size), device=self.device, dtype=torch.float32) * (p_high - p_low) + p_low
+        return p_init.unsqueeze(0).repeat(num_samples, 1)
+
+    def _assemble_full_contexts(self, learned_samples: torch.Tensor | None, num_samples: int) -> torch.Tensor:
+        full = torch.empty((num_samples, self.num_params), device=self.device, dtype=torch.float32)
+        learned_offset = 0
+        for p_cfg in self.cfg.params:
+            if getattr(p_cfg, "no_learning", False):
+                full[:, p_cfg.indices] = self._sample_no_learning_param(p_cfg, num_samples)
+                continue
+            if learned_samples is None:
+                raise ValueError("learned_samples is required when the config has learnable parameters.")
+            take = len(p_cfg.learning_indices)
+            full[:, p_cfg.indices] = learned_samples[:, learned_offset: learned_offset + take]
+            learned_offset += take
+        return full
+
+    def _project_learning_contexts(self, contexts: torch.Tensor) -> torch.Tensor:
+        contexts = contexts.to(device=self.device, dtype=torch.float32)
+        squeeze = False
+        if contexts.ndim == 1:
+            contexts = contexts.unsqueeze(0)
+            squeeze = True
+        if contexts.ndim != 2:
+            raise ValueError(f"Expected [B, D] contexts, got shape {tuple(contexts.shape)}")
+        if contexts.shape[1] == self.learning_num_params:
+            return contexts.squeeze(0) if squeeze else contexts
+        if contexts.shape[1] != self.num_params:
+            raise ValueError(
+                f"Expected contexts with {self.num_params} full dims or {self.learning_num_params} learning dims, "
+                f"got {contexts.shape[1]}"
+            )
+        if not self.has_learning_dims:
+            projected = contexts.new_zeros((contexts.shape[0], 0))
+            return projected.squeeze(0) if squeeze else projected
+        projected = contexts.index_select(1, self.learning_dim_indices)
+        return projected.squeeze(0) if squeeze else projected
+
+    def _expand_dist_samples(self, samples: torch.Tensor, num_samples: int) -> torch.Tensor:
+        samples = samples.to(device=self.device, dtype=torch.float32)
+        if samples.ndim == 1:
+            samples = samples.unsqueeze(0)
+        if samples.shape[1] == self.num_params:
+            return samples
+        if samples.shape[1] == self.learning_num_params:
+            return self._assemble_full_contexts(samples, num_samples)
+        raise ValueError(
+            f"Unexpected sampled dimensionality {samples.shape[1]} for sampler with "
+            f"full dim {self.num_params} and learned dim {self.learning_num_params}."
+        )
+
     def sample(self, num_samples: int) -> torch.Tensor:
-        return self.current_dist.rsample((num_samples,))
+        dist = self.current_dist if self.current_dist is not None else self.get_train_dist()
+        if dist is None:
+            return self._assemble_full_contexts(None, num_samples)
+        return self._expand_dist_samples(dist.rsample((num_samples,)), num_samples)
 
     def log_prob(self, value: torch.Tensor) -> torch.Tensor:
-    
-        return self.current_dist.log_prob(value)
+        value = value.to(device=self.device, dtype=torch.float32)
+        batch = value.shape[0] if value.ndim > 1 else 1
+        dist = self.current_dist if self.current_dist is not None else self.get_train_dist()
+        if dist is None:
+            return torch.zeros((batch,), device=value.device, dtype=value.dtype)
+        value = self._project_learning_contexts(value) if self.dist_dim == self.learning_num_params else value
+        return dist.log_prob(value)
     def log_prob_batch(self, values: torch.Tensor) -> torch.Tensor:
         return self.log_prob(values)
     def sample_contexts(self, num_samples: int) -> torch.Tensor:
@@ -436,29 +528,43 @@ class LearnableSampler:
         pass
     
     def get_train_dist(self):
-        return UniformDist(self.low, self.high, self.device)
+        if not self.has_learning_dims:
+            return None
+        return UniformDist(self.learn_low, self.learn_high, self.device)
     
     def get_test_dist(self):
-        return UniformDist(self.low, self.high, self.device)
+        if not self.has_learning_dims:
+            return None
+        return UniformDist(self.learn_low, self.learn_high, self.device)
     def get_train_sample_fn(self):
         dist = self.get_train_dist()
-        return lambda num_samples: dist.rsample((num_samples,))
+        if dist is None:
+            return lambda num_samples: self._assemble_full_contexts(None, num_samples)
+        return lambda num_samples: self._expand_dist_samples(dist.rsample((num_samples,)), num_samples)
     def get_test_sample_fn(self):
         dist = self.get_test_dist()
-        return lambda num_samples: dist.rsample((num_samples,))
+        if dist is None:
+            return lambda num_samples: self._assemble_full_contexts(None, num_samples)
+        return lambda num_samples: self._expand_dist_samples(dist.rsample((num_samples,)), num_samples)
 class NoDR(LearnableSampler):
     def __init__(self, cfg, device: str, **kwargs):
         super().__init__(cfg, device)
         self.name = "NoDR"
+        self.current_dist = self.get_train_dist()
 
     def get_train_dist(self):
-        return UniformDist(self.init, self.init, self.device)
+        if not self.has_learning_dims:
+            return None
+        return UniformDist(self.learn_init, self.learn_init, self.device)
 class UDR(LearnableSampler):
     def __init__(self, cfg, device: str, **kwargs):
         super().__init__(cfg, device)
         self.name = "UDR"
+        self.current_dist = self.get_train_dist()
     def get_train_dist(self):
-        return UniformDist(self.low, self.high, self.device)
+        if not self.has_learning_dims:
+            return None
+        return UniformDist(self.learn_low, self.learn_high, self.device)
 class ADR(LearnableSampler):
     def __init__(self, cfg, device: str,
                  boundary_prob=0.8, 
@@ -468,30 +574,42 @@ class ADR(LearnableSampler):
                 **kwargs):
         super().__init__(cfg, device)
         self.name = "ADR"
-        self.ndim = len(self.low)
+        self.ndim = self.learning_num_params
         self.success_threshold= success_threshold
         self.lower_threshold = success_threshold/2.0
         self.upper_threshold = success_threshold
         self.expansion_factor = expansion_factor
         self.boundary_prob = boundary_prob
-        
-        mid_range = (torch.tensor(self.low) + torch.tensor(self.high)) / 2
+
+        mid_range = (self.learn_low + self.learn_high) / 2
         # interval = (torch.tensor(domain_range.high) - torch.tensor(domain_range.low)) * initial_dr_percentage
-        span = self.high - self.low
+        span = self.learn_high - self.learn_low
         half_width = 0.5 * span * initial_dr_percentage
         self.current_low = mid_range - half_width
         self.current_high = mid_range + half_width
         # self.current_dist = BoundarySamplingDist(self.current_low, self.current_high, self.boundary_prob)
 
     def sample(self, num_samples: int) -> torch.Tensor:
-        return self.get_train_dist().rsample((num_samples,))
+        dist = self.get_train_dist()
+        if dist is None:
+            return self._assemble_full_contexts(None, num_samples)
+        return self._expand_dist_samples(dist.rsample((num_samples,)), num_samples)
     def log_prob(self, value: torch.Tensor) -> torch.Tensor:
-        return self.get_train_dist().log_prob(value)
+        dist = self.get_train_dist()
+        if dist is None:
+            batch = value.shape[0] if value.ndim > 1 else 1
+            return torch.zeros((batch,), device=value.device, dtype=value.dtype)
+        return dist.log_prob(self._project_learning_contexts(value))
     
     def get_train_dist(self):
+        if not self.has_learning_dims:
+            return None
         return BoundarySamplingDist(self.current_low, self.current_high, self.boundary_prob)
 
     def update(self, contexts, returns):
+        if not self.has_learning_dims:
+            return
+        contexts = self._project_learning_contexts(contexts)
         returns = returns.view(-1).to(device=self.device)
         if not torch.is_floating_point(returns):
             returns = returns.float()
@@ -533,7 +651,7 @@ class ADR(LearnableSampler):
         low_expand   = low_success_rate  > upper
         low_contract = low_success_rate  < lower
 
-        low_floor = self.low.index_select(0, dim_t)  # (1,)
+        low_floor = self.learn_low.index_select(0, dim_t)  # (1,)
 
         new_low_expand   = torch.maximum(midpoint - (midpoint - low_b) * ef, low_floor)
         new_low_contract = torch.minimum(midpoint - (midpoint - low_b) / ef, midpoint)
@@ -547,7 +665,7 @@ class ADR(LearnableSampler):
         high_expand   = high_success_rate > upper
         high_contract = high_success_rate < lower
 
-        high_ceil = self.high.index_select(0, dim_t)  # (1,)
+        high_ceil = self.learn_high.index_select(0, dim_t)  # (1,)
 
         new_high_expand   = torch.minimum(midpoint + (high_b - midpoint) * ef, high_ceil)
         new_high_contract = torch.maximum(midpoint + (high_b - midpoint) / ef, midpoint)
@@ -573,13 +691,14 @@ class DORAEMON(LearnableSampler):
         device = torch.device("cpu")
         super().__init__(cfg, device)
         self.name = "DORAEMON"
+        self.dist_dim = self.learning_num_params
         self.success_threshold = success_threshold
         self.success_rate_condition = success_rate_condition
         self.kl_upper_bound = kl_upper_bound
         self.train_until_performance_lb = train_until_performance_lb
         self.hard_performance_constraint = hard_performance_constraint
         self.train_until_done = False 
-        self.ndim = len(self.low)
+        self.ndim = self.learning_num_params
         
         self.min_bound = 0.8
         self.max_bound = init_beta_param + 10
@@ -593,10 +712,19 @@ class DORAEMON(LearnableSampler):
 
     
     def _create_initial_distribution(self, init_beta_param):
-        return BetasDist(torch.ones(self.ndim, device=self.low.device) * init_beta_param, torch.ones(self.ndim, device=self.low.device) * init_beta_param, self.low, self.high)
+        if not self.has_learning_dims:
+            return None
+        return BetasDist(
+            torch.ones(self.ndim, device=self.learn_low.device) * init_beta_param,
+            torch.ones(self.ndim, device=self.learn_low.device) * init_beta_param,
+            self.learn_low,
+            self.learn_high,
+        )
 
     def _create_target_distribution(self):
-        return UniformDist(self.low, self.high, self.device)
+        if not self.has_learning_dims:
+            return None
+        return UniformDist(self.learn_low, self.learn_high, self.device)
 
     def get_train_dist(self):
         return self.current_dist
@@ -702,13 +830,15 @@ class DORAEMON(LearnableSampler):
 
 
     def update(self, contexts, returns):
+        if not self.has_learning_dims:
+            return
         self.current_iter += 1
 
         print("Updating DORAEMON")
 
         # Convert to numpy and ensure double precision
-        contexts = contexts.detach().to(device=self.low.device, dtype=torch.float64)
-        returns  = returns.detach().to(device=self.low.device, dtype=torch.float64)
+        contexts = self._project_learning_contexts(contexts).detach().to(device=self.learn_low.device, dtype=torch.float64)
+        returns  = returns.detach().to(device=self.learn_low.device, dtype=torch.float64)
 
         print("Contexts shape:", contexts.shape)
         print("Returns shape:", returns.shape)
@@ -794,20 +924,23 @@ class GOFLOW(LearnableSampler):
         self.name = "GOFLOW"
         self.alpha = alpha  # Weight for entropy maximization (KL to target)
         self.beta = beta    # Weight for similarity constraint (KL to previous)
-        self.current_dist = NormFlowDist(
-            self.low.detach().clone(),
-            self.high.detach().clone(),
-            ndim=self.low.numel()
+        self.dist_dim = self.learning_num_params
+        self.current_dist = None if not self.has_learning_dims else NormFlowDist(
+            self.learn_low.detach().clone(),
+            self.learn_high.detach().clone(),
+            ndim=self.learn_low.numel()
         )
-        self.dist_optimizer = torch.optim.Adam(self.current_dist.get_params(), lr=1e-3)
-        self.dist_optimizer.zero_grad()
+        self.dist_optimizer = None if self.current_dist is None else torch.optim.Adam(self.current_dist.get_params(), lr=1e-3)
+        if self.dist_optimizer is not None:
+            self.dist_optimizer.zero_grad()
         self.num_training_iters = num_training_iters
         self.dist_history = []
-        self.target_dist = UniformDist(self.low, self.high, self.device)
+        self.target_dist = None if not self.has_learning_dims else UniformDist(self.learn_low, self.learn_high, self.device)
         self.max_loss = max_loss  # Add a maximum loss threshold
-        params = list(self.current_dist.get_params())
-        print("nparams:", len(params))
-        print([(p.shape, p.requires_grad, type(p)) for p in params])
+        if self.current_dist is not None:
+            params = list(self.current_dist.get_params())
+            print("nparams:", len(params))
+            print([(p.shape, p.requires_grad, type(p)) for p in params])
     
     def get_test_dist(self):
         return self.target_dist
@@ -816,12 +949,14 @@ class GOFLOW(LearnableSampler):
         return self.current_dist
 
     def update(self, contexts, returns, entropy_update=True):
+        if not self.has_learning_dims:
+            return
         print("Updating the GOFLOW distribution")
         # cpu = torch.device("cpu")
         # returns = returns.view(-1).to(device=cpu)
         # R = torch.FloatTensor(returns).flatten().to(self.current_dist.device)
         # R_ = (R - R.mean()) / (R.std() + 1e-8)
-        contexts = contexts.to(self.current_dist.device, dtype=torch.float32)
+        contexts = self._project_learning_contexts(contexts).to(self.current_dist.device, dtype=torch.float32)
         R = returns.reshape(-1).to(self.current_dist.device, dtype=torch.float32)
         R_ = (R - R.mean()) / (R.std(unbiased=False) + 1e-8)
         previous_dist = self.current_dist.clone()
