@@ -188,7 +188,7 @@ class FrankaCabinetEnvGBSCfg(FrankaCabinetEnvCfg):
         init_std=0.5,
         lr=1e-4,
         clip_grad=1.0,
-        num_steps=32,
+        num_steps=100,
         model_num_layers=2,
         model_num_hid=64,
         max_rnd=1e8,
